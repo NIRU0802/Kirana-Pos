@@ -16,6 +16,8 @@ export default function SettingsPage() {
   const { setTheme, theme } = useAppStore();
   const { register, handleSubmit, reset, watch, formState: { isSubmitting } } = useForm<AppSettings>();
   const [syncing, setSyncing] = useState(false);
+  const [restoring, setRestoring] = useState(false);
+  const [restoreConfirmText, setRestoreConfirmText] = useState("");
 
   useEffect(() => { ipcInvoke<AppSettings>(IPC_CHANNELS.SETTINGS_GET_ALL).then(reset).catch(console.error); }, [reset]);
 
@@ -45,7 +47,7 @@ export default function SettingsPage() {
 
         <Card>
           <CardHeader><CardTitle className="text-base">Appearance</CardTitle></CardHeader>
-          <CardContent><div className="flex gap-2"><Button type="button" variant={theme === "light" ? "default" : "outline"} onClick={() => setTheme("light")}>☀️ Light</Button><Button type="button" variant={theme === "dark" ? "default" : "outline"} onClick={() => setTheme("dark")}>🌙 Dark</Button></div></CardContent>
+          <CardContent><div className="flex gap-2"><Button type="button" variant={theme === "light" ? "default" : "outline"} onClick={() => setTheme("light")}>Light</Button><Button type="button" variant={theme === "dark" ? "default" : "outline"} onClick={() => setTheme("dark")}>Dark</Button></div></CardContent>
         </Card>
 
         <Card>
@@ -84,22 +86,80 @@ export default function SettingsPage() {
             </div>
 
             <div className="text-sm text-muted-foreground space-y-1 pt-2 border-t">
-              <p>Last daily sync: {watch("lastDailySyncAt") || "Never"}</p>
+              <p>Last daily sync (local): {watch("lastDailySyncAt") || "Never"}</p>
               <p>Last monthly merge: {watch("lastMonthlySyncAt") || "Never"}</p>
+              <p>
+                Last online backup:{" "}
+                {watch("googleSheetsEnabled") === "true"
+                  ? (watch("lastDailySyncAt") ? watch("lastDailySyncAt") : "Failed / Not attempted")
+                  : "Disabled"}
+              </p>
             </div>
 
-            <Button type="button" disabled={syncing} onClick={async () => {
-              setSyncing(true);
-              try {
-                await ipcInvoke(IPC_CHANNELS.SYNC_NOW);
-                toast({ title: "Sync complete", variant: "success" });
-                ipcInvoke<AppSettings>(IPC_CHANNELS.SETTINGS_GET_ALL).then(reset).catch(console.error);
-              } catch (e) {
-                toast({ title: e instanceof Error ? e.message : "Sync failed", variant: "destructive" });
-              } finally {
-                setSyncing(false);
-              }
-            }}>{syncing ? "Syncing…" : "Sync Now"}</Button>
+            <div className="flex gap-2">
+              <Button type="button" disabled={syncing} onClick={async () => {
+                setSyncing(true);
+                try {
+                  await ipcInvoke(IPC_CHANNELS.SYNC_NOW);
+                  toast({ title: "Sync complete", variant: "success" });
+                  ipcInvoke<AppSettings>(IPC_CHANNELS.SETTINGS_GET_ALL).then(reset).catch(console.error);
+                } catch (e) {
+                  toast({ title: e instanceof Error ? e.message : "Sync failed", variant: "destructive" });
+                } finally {
+                  setSyncing(false);
+                }
+              }}>{syncing ? "Syncing…" : "Sync Now"}</Button>
+
+              <Button type="button" variant="outline" disabled={syncing} onClick={async () => {
+                setSyncing(true);
+                try {
+                  await ipcInvoke(IPC_CHANNELS.SYNC_MERGE_MONTH);
+                  toast({ title: "Monthly merge complete", variant: "success" });
+                  ipcInvoke<AppSettings>(IPC_CHANNELS.SETTINGS_GET_ALL).then(reset).catch(console.error);
+                } catch (e) {
+                  toast({ title: e instanceof Error ? e.message : "Merge failed", variant: "destructive" });
+                } finally {
+                  setSyncing(false);
+                }
+              }}>Merge This Month Now</Button>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="border-red-300 bg-red-50">
+          <CardHeader><CardTitle className="text-base text-red-700">Disaster Recovery</CardTitle></CardHeader>
+          <CardContent className="space-y-4">
+            <p className="text-sm text-red-700">
+              This will overwrite your current local Products and Customers data with whatever is
+              currently in your Google Sheet. Only use this if your local database is lost or corrupted.
+              A safety snapshot of your current database is taken automatically before this runs.
+            </p>
+            <div className="space-y-1.5">
+              <Label>Type RESTORE to confirm</Label>
+              <Input value={restoreConfirmText} onChange={(e) => setRestoreConfirmText(e.target.value)} placeholder="RESTORE" />
+            </div>
+            <Button
+              type="button"
+              variant="destructive"
+              disabled={restoreConfirmText !== "RESTORE" || restoring}
+              onClick={async () => {
+                setRestoring(true);
+                try {
+                  const result = await ipcInvoke<{ restored: Record<string, number> }>(IPC_CHANNELS.SYNC_RESTORE_FROM_SHEETS);
+                  toast({
+                    title: `Restored ${result.restored["products"] ?? 0} products, ${result.restored["customers"] ?? 0} customers`,
+                    variant: "success",
+                  });
+                  setRestoreConfirmText("");
+                } catch (e) {
+                  toast({ title: e instanceof Error ? e.message : "Restore failed", variant: "destructive" });
+                } finally {
+                  setRestoring(false);
+                }
+              }}
+            >
+              {restoring ? "Restoring…" : "Restore from Google Sheets"}
+            </Button>
           </CardContent>
         </Card>
 

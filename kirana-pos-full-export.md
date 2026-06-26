@@ -1074,7 +1074,7 @@ F:\kirana-pos\app\(management)\settings\page.tsx
 
 ```typescriptreact
 "use client";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { ipcInvoke } from "@/shared/lib/ipc-client";
 import { IPC_CHANNELS } from "@/shared/types/ipc";
@@ -1089,7 +1089,10 @@ import type { AppSettings } from "@/features/settings/types";
 export default function SettingsPage() {
   const { toast } = useToastEmitter();
   const { setTheme, theme } = useAppStore();
-  const { register, handleSubmit, reset, formState: { isSubmitting } } = useForm<AppSettings>();
+  const { register, handleSubmit, reset, watch, formState: { isSubmitting } } = useForm<AppSettings>();
+  const [syncing, setSyncing] = useState(false);
+  const [restoring, setRestoring] = useState(false);
+  const [restoreConfirmText, setRestoreConfirmText] = useState("");
 
   useEffect(() => { ipcInvoke<AppSettings>(IPC_CHANNELS.SETTINGS_GET_ALL).then(reset).catch(console.error); }, [reset]);
 
@@ -1116,16 +1119,130 @@ export default function SettingsPage() {
           <CardHeader><CardTitle className="text-base">Store Information</CardTitle></CardHeader>
           <CardContent className="space-y-4">{fields.map(({ key, label, placeholder }) => (<div key={key} className="space-y-1.5"><Label>{label}</Label><Input {...register(key)} placeholder={placeholder} /></div>))}</CardContent>
         </Card>
+
         <Card>
           <CardHeader><CardTitle className="text-base">Appearance</CardTitle></CardHeader>
-          <CardContent><div className="flex gap-2"><Button type="button" variant={theme === "light" ? "default" : "outline"} onClick={() => setTheme("light")}>☀️ Light</Button><Button type="button" variant={theme === "dark" ? "default" : "outline"} onClick={() => setTheme("dark")}>🌙 Dark</Button></div></CardContent>
+          <CardContent><div className="flex gap-2"><Button type="button" variant={theme === "light" ? "default" : "outline"} onClick={() => setTheme("light")}>Light</Button><Button type="button" variant={theme === "dark" ? "default" : "outline"} onClick={() => setTheme("dark")}>Dark</Button></div></CardContent>
         </Card>
+
+        <Card>
+          <CardHeader><CardTitle className="text-base">Data Safety / Backup to Excel & Sheets</CardTitle></CardHeader>
+          <CardContent className="space-y-4">
+            <div className="space-y-1.5">
+              <Label>Excel Export Folder</Label>
+              <div className="flex gap-2">
+                <Input {...register("excelExportFolderPath")} readOnly placeholder="No folder selected" />
+                <Button type="button" variant="outline" onClick={async () => {
+                  const path = await ipcInvoke<string | null>(IPC_CHANNELS.BACKUP_PICK_EXPORT_FOLDER);
+                  if (path) { reset((prev) => ({ ...prev, excelExportFolderPath: path })); }
+                }}>Choose Folder</Button>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between">
+              <Label>Enable Google Sheets backup</Label>
+              <input type="checkbox" {...register("googleSheetsEnabled")} className="h-4 w-4" />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label>Service Account Credentials File</Label>
+              <div className="flex gap-2">
+                <Input {...register("googleSheetsCredentialsPath")} readOnly placeholder="No file selected" />
+                <Button type="button" variant="outline" onClick={async () => {
+                  const path = await ipcInvoke<string | null>(IPC_CHANNELS.BACKUP_PICK_CREDENTIALS_FILE);
+                  if (path) { reset((prev) => ({ ...prev, googleSheetsCredentialsPath: path })); }
+                }}>Choose File</Button>
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label>Spreadsheet ID</Label>
+              <Input {...register("googleSheetsSpreadsheetId")} placeholder="Paste the Google Sheet ID here" />
+            </div>
+
+            <div className="text-sm text-muted-foreground space-y-1 pt-2 border-t">
+              <p>Last daily sync (local): {watch("lastDailySyncAt") || "Never"}</p>
+              <p>Last monthly merge: {watch("lastMonthlySyncAt") || "Never"}</p>
+              <p>
+                Last online backup:{" "}
+                {watch("googleSheetsEnabled") === "true"
+                  ? (watch("lastDailySyncAt") ? watch("lastDailySyncAt") : "Failed / Not attempted")
+                  : "Disabled"}
+              </p>
+            </div>
+
+            <div className="flex gap-2">
+              <Button type="button" disabled={syncing} onClick={async () => {
+                setSyncing(true);
+                try {
+                  await ipcInvoke(IPC_CHANNELS.SYNC_NOW);
+                  toast({ title: "Sync complete", variant: "success" });
+                  ipcInvoke<AppSettings>(IPC_CHANNELS.SETTINGS_GET_ALL).then(reset).catch(console.error);
+                } catch (e) {
+                  toast({ title: e instanceof Error ? e.message : "Sync failed", variant: "destructive" });
+                } finally {
+                  setSyncing(false);
+                }
+              }}>{syncing ? "Syncing…" : "Sync Now"}</Button>
+
+              <Button type="button" variant="outline" disabled={syncing} onClick={async () => {
+                setSyncing(true);
+                try {
+                  await ipcInvoke(IPC_CHANNELS.SYNC_MERGE_MONTH);
+                  toast({ title: "Monthly merge complete", variant: "success" });
+                  ipcInvoke<AppSettings>(IPC_CHANNELS.SETTINGS_GET_ALL).then(reset).catch(console.error);
+                } catch (e) {
+                  toast({ title: e instanceof Error ? e.message : "Merge failed", variant: "destructive" });
+                } finally {
+                  setSyncing(false);
+                }
+              }}>Merge This Month Now</Button>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="border-red-300 bg-red-50">
+          <CardHeader><CardTitle className="text-base text-red-700">Disaster Recovery</CardTitle></CardHeader>
+          <CardContent className="space-y-4">
+            <p className="text-sm text-red-700">
+              This will overwrite your current local Products and Customers data with whatever is
+              currently in your Google Sheet. Only use this if your local database is lost or corrupted.
+              A safety snapshot of your current database is taken automatically before this runs.
+            </p>
+            <div className="space-y-1.5">
+              <Label>Type RESTORE to confirm</Label>
+              <Input value={restoreConfirmText} onChange={(e) => setRestoreConfirmText(e.target.value)} placeholder="RESTORE" />
+            </div>
+            <Button
+              type="button"
+              variant="destructive"
+              disabled={restoreConfirmText !== "RESTORE" || restoring}
+              onClick={async () => {
+                setRestoring(true);
+                try {
+                  const result = await ipcInvoke<{ restored: Record<string, number> }>(IPC_CHANNELS.SYNC_RESTORE_FROM_SHEETS);
+                  toast({
+                    title: `Restored ${result.restored["products"] ?? 0} products, ${result.restored["customers"] ?? 0} customers`,
+                    variant: "success",
+                  });
+                  setRestoreConfirmText("");
+                } catch (e) {
+                  toast({ title: e instanceof Error ? e.message : "Restore failed", variant: "destructive" });
+                } finally {
+                  setRestoring(false);
+                }
+              }}
+            >
+              {restoring ? "Restoring…" : "Restore from Google Sheets"}
+            </Button>
+          </CardContent>
+        </Card>
+
         <Button type="submit" disabled={isSubmitting}>{isSubmitting ? "Saving…" : "Save Settings"}</Button>
       </form>
     </div>
   );
 }
-
 ```
 
 
@@ -1389,6 +1506,20 @@ INSERT OR IGNORE INTO Category(name) VALUES ('Groceries'),('Dairy'),('Beverages'
 ```
 
 
+F:\kirana-pos\database\migrations\002_add_backup_sync_settings.sql
+
+```sql
+INSERT OR IGNORE INTO Settings(key, value) VALUES
+  ('excelExportFolderPath', ''),
+  ('lastDailySyncAt', ''),
+  ('lastMonthlySyncAt', ''),
+  ('googleSheetsEnabled', 'false'),
+  ('googleSheetsCredentialsPath', ''),
+  ('googleSheetsSpreadsheetId', '');
+
+```
+
+
 F:\kirana-pos\database\repositories\base.repository.ts
 
 ```typescript
@@ -1643,6 +1774,7 @@ import { registerCustomerHandlers } from "./customer.handlers";
 import { registerReportHandlers } from "./report.handlers";
 import { registerSettingsHandlers } from "./settings.handlers";
 import { registerBackupHandlers } from "./backup.handlers";
+import { registerSyncHandlers } from "./sync.handlers";
 import { registerAuditHandlers } from "./audit.handlers";
 
 export function registerAllHandlers(ipcMain: IpcMain): void {
@@ -1655,6 +1787,7 @@ export function registerAllHandlers(ipcMain: IpcMain): void {
   registerReportHandlers(ipcMain);
   registerSettingsHandlers(ipcMain);
   registerBackupHandlers(ipcMain);
+  registerSyncHandlers(ipcMain);
   registerAuditHandlers(ipcMain);
 
   ipcMain.handle(IPC_CHANNELS.APP_GET_VERSION, (): IpcResponse<string> => ({ success: true, data: process.env["npm_package_version"] ?? "1.0.0" }));
@@ -1670,7 +1803,6 @@ export function safeHandle<T>(fn: (...args: unknown[]) => T | Promise<T>): (...a
     }
   };
 }
-
 ```
 
 
@@ -1750,6 +1882,57 @@ export function registerSettingsHandlers(ipcMain: IpcMain): void {
   ipcMain.handle(IPC_CHANNELS.SETTINGS_UPDATE, safeHandle((_e, updates) => settingsService.update(updates as Partial<AppSettings>)));
 }
 
+```
+
+
+F:\kirana-pos\electron\ipc\sync.handlers.ts
+
+```typescript
+import type { IpcMain } from "electron";
+import { dialog } from "electron";
+import { IPC_CHANNELS } from "../../shared/types/ipc";
+import { safeHandle } from "./handlers";
+import { settingsService } from "../../features/settings/services/settings.service";
+import { exportDailySalesAndKhata, exportDailySnapshot, mergeMonthlyExport } from "../../features/backup/services/export-excel.service";
+import { pushDailyDataToSheets, restoreFromSheets } from "../../features/backup/services/sheets-sync.service";
+
+export function registerSyncHandlers(ipcMain: IpcMain): void {
+  ipcMain.handle(IPC_CHANNELS.BACKUP_PICK_EXPORT_FOLDER, safeHandle(async () => {
+    const result = await dialog.showOpenDialog({ properties: ["openDirectory", "createDirectory"] });
+    if (result.canceled || result.filePaths.length === 0) return null;
+    const folderPath = result.filePaths[0] as string;
+    settingsService.update({ excelExportFolderPath: folderPath });
+    return folderPath;
+  }));
+
+  ipcMain.handle(IPC_CHANNELS.BACKUP_PICK_CREDENTIALS_FILE, safeHandle(async () => {
+    const result = await dialog.showOpenDialog({ properties: ["openFile"], filters: [{ name: "JSON", extensions: ["json"] }] });
+    if (result.canceled || result.filePaths.length === 0) return null;
+    const filePath = result.filePaths[0] as string;
+    settingsService.update({ googleSheetsCredentialsPath: filePath });
+    return filePath;
+  }));
+
+  ipcMain.handle(IPC_CHANNELS.SYNC_NOW, safeHandle(async () => {
+    const today = new Date();
+    await exportDailySalesAndKhata(today);
+    await exportDailySnapshot(today);
+    await pushDailyDataToSheets(today);
+    settingsService.update({ lastDailySyncAt: new Date().toISOString() });
+    return { ok: true };
+  }));
+
+  ipcMain.handle(IPC_CHANNELS.SYNC_MERGE_MONTH, safeHandle(async () => {
+    const now = new Date();
+    await mergeMonthlyExport(now.getFullYear(), now.getMonth() + 1);
+    settingsService.update({ lastMonthlySyncAt: new Date().toISOString() });
+    return { ok: true };
+  }));
+
+  ipcMain.handle(IPC_CHANNELS.SYNC_RESTORE_FROM_SHEETS, safeHandle(async () => {
+    return await restoreFromSheets();
+  }));
+}
 ```
 
 
@@ -1944,6 +2127,164 @@ export interface ChangePasswordInput { userId: number; currentPassword: string; 
 
 ```
 
+
+F:\kirana-pos\features\backup\repositories\export.repository.ts
+
+```typescript
+import { BaseRepository } from "../../../database/repositories/base.repository";
+
+export interface BillExportRow {
+  id: number;
+  billNumber: string;
+  customerId: number | null;
+  customerName: string | null;
+  subtotal: number;
+  gstTotal: number;
+  discount: number;
+  roundOff: number;
+  grandTotal: number;
+  amountPaid: number;
+  changeDue: number;
+  paymentMethod: string;
+  status: string;
+  itemCount: number;
+  createdAt: string;
+}
+
+export interface CreditLedgerExportRow {
+  id: number;
+  customerId: number;
+  customerName: string;
+  type: string;
+  amount: number;
+  billId: number | null;
+  note: string | null;
+  createdAt: string;
+}
+
+export interface ProductSnapshotRow {
+  id: number;
+  barcode: string | null;
+  name: string;
+  categoryName: string | null;
+  unit: string;
+  costPrice: number;
+  sellingPrice: number;
+  mrp: number;
+  gstRate: number;
+  hsnCode: string | null;
+  lowStockAlert: number;
+  isActive: number;
+  stock: number;
+  createdAt: string;
+}
+
+export interface CustomerSnapshotRow {
+  id: number;
+  name: string;
+  phone: string | null;
+  address: string | null;
+  creditLimit: number;
+  creditBalance: number;
+  isActive: number;
+  createdAt: string;
+}
+
+export interface InventorySnapshotRow {
+  productId: number;
+  productName: string;
+  unit: string;
+  quantity: number;
+  lowStockAlert: number;
+  costPrice: number;
+  stockValue: number; // quantity * costPrice, in paise
+}
+
+export class ExportRepository extends BaseRepository {
+  getBillsForDate(startIso: string, endIso: string): BillExportRow[] {
+    return this.db.prepare<[string, string], BillExportRow>(
+      `SELECT b.id, b.billNumber, b.customerId, c.name AS customerName,
+              b.subtotal, b.gstTotal, b.discount, b.roundOff, b.grandTotal,
+              b.amountPaid, b.changeDue, b.paymentMethod, b.status,
+              (SELECT COUNT(*) FROM BillItem bi WHERE bi.billId = b.id) AS itemCount,
+              b.createdAt
+       FROM Bill b
+       LEFT JOIN Customer c ON c.id = b.customerId
+       WHERE b.createdAt >= ? AND b.createdAt < ?
+       ORDER BY b.createdAt ASC`
+    ).all(startIso, endIso);
+  }
+
+  getCreditLedgerForDate(startIso: string, endIso: string): CreditLedgerExportRow[] {
+    return this.db.prepare<[string, string], CreditLedgerExportRow>(
+      `SELECT cl.id, cl.customerId, c.name AS customerName, cl.type, cl.amount,
+              cl.billId, cl.note, cl.createdAt
+       FROM CreditLedger cl
+       JOIN Customer c ON c.id = cl.customerId
+       WHERE cl.createdAt >= ? AND cl.createdAt < ?
+       ORDER BY cl.createdAt ASC`
+    ).all(startIso, endIso);
+  }
+
+  getAllProductsSnapshot(): ProductSnapshotRow[] {
+    return this.db.prepare<[], ProductSnapshotRow>(
+      `SELECT p.id, p.barcode, p.name, c.name AS categoryName, p.unit,
+              p.costPrice, p.sellingPrice, p.mrp, p.gstRate, p.hsnCode,
+              p.lowStockAlert, p.isActive, COALESCE(s.quantity,0) AS stock, p.createdAt
+       FROM Product p
+       LEFT JOIN Category c ON c.id = p.categoryId
+       LEFT JOIN Stock s ON s.productId = p.id
+       ORDER BY p.name`
+    ).all();
+  }
+
+  getAllCustomersSnapshot(): CustomerSnapshotRow[] {
+    return this.db.prepare<[], CustomerSnapshotRow>(
+      `SELECT id, name, phone, address, creditLimit, creditBalance, isActive, createdAt
+       FROM Customer ORDER BY name`
+    ).all();
+  }
+
+  getAllInventorySnapshot(): InventorySnapshotRow[] {
+    return this.db.prepare<[], InventorySnapshotRow>(
+      `SELECT s.productId, p.name AS productName, p.unit, s.quantity, p.lowStockAlert, p.costPrice,
+              (s.quantity * p.costPrice) AS stockValue
+       FROM Stock s
+       JOIN Product p ON p.id = s.productId
+       ORDER BY p.name`
+    ).all();
+  }
+}
+```
+
+
+F:\kirana-pos\features\backup\schemas\restore.schemas.ts
+
+```typescript
+import { z } from "zod";
+
+export const restoredProductSchema = z.object({
+  "Product ID": z.union([z.number(), z.string()]),
+  "Name": z.string().min(1),
+  "Unit": z.string().min(1),
+  "Cost Price": z.union([z.number(), z.string()]),
+  "Selling Price": z.union([z.number(), z.string()]),
+  "MRP": z.union([z.number(), z.string()]),
+  "GST Rate": z.union([z.number(), z.string()]),
+});
+
+export const restoredCustomerSchema = z.object({
+  "Customer ID": z.union([z.number(), z.string()]),
+  "Name": z.string().min(1),
+  "Credit Limit": z.union([z.number(), z.string()]),
+  "Credit Balance": z.union([z.number(), z.string()]),
+});
+
+export type RestoredProductRow = z.infer<typeof restoredProductSchema>;
+export type RestoredCustomerRow = z.infer<typeof restoredCustomerSchema>;
+```
+
+
 F:\kirana-pos\features\backup\services\backup.service.ts
 
 ```typescript
@@ -1989,9 +2330,605 @@ export const backupService = {
 ```
 
 
+F:\kirana-pos\features\backup\services\export-excel.service.ts
+
+```typescript
+import fs from "fs";
+import path from "path";
+import ExcelJS from "exceljs";
+import { ExportRepository } from "../repositories/export.repository";
+import { settingsService } from "../../settings/services/settings.service";
+
+const exportRepo = new ExportRepository();
+
+function toDateRange(date: Date): { startIso: string; endIso: string; ymd: string } {
+  const start = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 0, 0, 0, 0);
+  const end = new Date(date.getFullYear(), date.getMonth(), date.getDate() + 1, 0, 0, 0, 0);
+  const ymd = start.toISOString().slice(0, 10);
+  return { startIso: start.toISOString(), endIso: end.toISOString(), ymd };
+}
+
+function paiseToRupees(paise: number): number {
+  return Math.round(paise) / 100;
+}
+
+function getExportFolder(): string {
+  const folder = settingsService.getAll().excelExportFolderPath;
+  if (!folder) throw new Error("Excel export folder is not set. Choose a folder in Settings first.");
+  return folder;
+}
+
+function getDailyDir(): string {
+  const dir = path.join(getExportFolder(), "daily");
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+function getMonthlyDir(): string {
+  const dir = path.join(getExportFolder(), "monthly");
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+async function getExistingIds(filePath: string): Promise<Set<number>> {
+  const ids = new Set<number>();
+  if (!fs.existsSync(filePath)) return ids;
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.readFile(filePath);
+  const sheet = workbook.worksheets[0];
+  if (!sheet) return ids;
+  sheet.eachRow((row, rowNumber) => {
+    if (rowNumber === 1) return;
+    const idCell = row.getCell(1).value;
+    if (typeof idCell === "number") ids.add(idCell);
+  });
+  return ids;
+}
+
+async function appendSalesRows(filePath: string, rows: ReturnType<ExportRepository["getBillsForDate"]>): Promise<number> {
+  const workbook = new ExcelJS.Workbook();
+  let sheet: ExcelJS.Worksheet;
+
+  if (fs.existsSync(filePath)) {
+    await workbook.xlsx.readFile(filePath);
+    sheet = workbook.worksheets[0] ?? workbook.addWorksheet("Sales");
+  } else {
+    sheet = workbook.addWorksheet("Sales");
+    sheet.addRow([
+      "Bill ID", "Bill Number", "Customer", "Payment Method", "Status", "Item Count",
+      "Subtotal (₹)", "GST (₹)", "Discount (₹)", "Round Off (₹)", "Grand Total (₹)",
+      "Amount Paid (₹)", "Change Due (₹)", "Created At",
+    ]);
+    sheet.getRow(1).font = { bold: true };
+  }
+
+  const existingIds = await getExistingIds(filePath);
+  let added = 0;
+
+  for (const bill of rows) {
+    if (existingIds.has(bill.id)) continue;
+    sheet.addRow([
+      bill.id, bill.billNumber, bill.customerName ?? "Walk-in", bill.paymentMethod, bill.status, bill.itemCount,
+      paiseToRupees(bill.subtotal), paiseToRupees(bill.gstTotal), paiseToRupees(bill.discount),
+      paiseToRupees(bill.roundOff), paiseToRupees(bill.grandTotal), paiseToRupees(bill.amountPaid),
+      paiseToRupees(bill.changeDue), bill.createdAt,
+    ]);
+    added++;
+  }
+
+  if (added > 0) await workbook.xlsx.writeFile(filePath);
+  return added;
+}
+
+async function appendKhataRows(filePath: string, rows: ReturnType<ExportRepository["getCreditLedgerForDate"]>): Promise<number> {
+  const workbook = new ExcelJS.Workbook();
+  let sheet: ExcelJS.Worksheet;
+
+  if (fs.existsSync(filePath)) {
+    await workbook.xlsx.readFile(filePath);
+    sheet = workbook.worksheets[0] ?? workbook.addWorksheet("Khata");
+  } else {
+    sheet = workbook.addWorksheet("Khata");
+    sheet.addRow(["Ledger ID", "Customer", "Type", "Amount (₹)", "Bill ID", "Note", "Created At"]);
+    sheet.getRow(1).font = { bold: true };
+  }
+
+  const existingIds = await getExistingIds(filePath);
+  let added = 0;
+
+  for (const entry of rows) {
+    if (existingIds.has(entry.id)) continue;
+    sheet.addRow([
+      entry.id, entry.customerName, entry.type, paiseToRupees(entry.amount),
+      entry.billId ?? "", entry.note ?? "", entry.createdAt,
+    ]);
+    added++;
+  }
+
+  if (added > 0) await workbook.xlsx.writeFile(filePath);
+  return added;
+}
+
+export async function exportDailySalesAndKhata(date: Date): Promise<void> {
+  const { startIso, endIso, ymd } = toDateRange(date);
+  const dir = getDailyDir();
+
+  const sales = exportRepo.getBillsForDate(startIso, endIso);
+  const khata = exportRepo.getCreditLedgerForDate(startIso, endIso);
+
+  const salesPath = path.join(dir, `${ymd}-Sales.xlsx`);
+  const khataPath = path.join(dir, `${ymd}-Khata.xlsx`);
+
+  const addedSales = await appendSalesRows(salesPath, sales);
+  const addedKhata = await appendKhataRows(khataPath, khata);
+
+  console.log(`[ExportExcel] Sales: ${addedSales} new row(s) -> ${salesPath}`);
+  console.log(`[ExportExcel] Khata: ${addedKhata} new row(s) -> ${khataPath}`);
+}
+
+export async function exportDailySnapshot(date: Date): Promise<void> {
+  const { ymd } = toDateRange(date);
+  const dir = getDailyDir();
+
+  await writeProductSnapshot(path.join(dir, `${ymd}-Products-snapshot.xlsx`));
+  await writeCustomerSnapshot(path.join(dir, `${ymd}-Customers-snapshot.xlsx`));
+  await writeInventorySnapshot(path.join(dir, `${ymd}-Inventory-snapshot.xlsx`));
+}
+
+async function writeProductSnapshot(filePath: string): Promise<void> {
+  const rows = exportRepo.getAllProductsSnapshot();
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet("Products");
+  sheet.addRow([
+    "Product ID", "Barcode", "Name", "Category", "Unit", "Cost Price (₹)", "Selling Price (₹)",
+    "MRP (₹)", "GST Rate (%)", "HSN Code", "Low Stock Alert", "Active", "Current Stock", "Created At",
+  ]);
+  sheet.getRow(1).font = { bold: true };
+
+  for (const p of rows) {
+    sheet.addRow([
+      p.id, p.barcode ?? "", p.name, p.categoryName ?? "", p.unit,
+      paiseToRupees(p.costPrice), paiseToRupees(p.sellingPrice), paiseToRupees(p.mrp),
+      p.gstRate, p.hsnCode ?? "", p.lowStockAlert, p.isActive ? "Yes" : "No", p.stock, p.createdAt,
+    ]);
+  }
+
+  await workbook.xlsx.writeFile(filePath);
+  console.log(`[ExportExcel] Products snapshot: ${rows.length} row(s) -> ${filePath}`);
+}
+
+async function writeCustomerSnapshot(filePath: string): Promise<void> {
+  const rows = exportRepo.getAllCustomersSnapshot();
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet("Customers");
+  sheet.addRow(["Customer ID", "Name", "Phone", "Address", "Credit Limit (₹)", "Credit Balance (₹)", "Active", "Created At"]);
+  sheet.getRow(1).font = { bold: true };
+
+  for (const c of rows) {
+    sheet.addRow([
+      c.id, c.name, c.phone ?? "", c.address ?? "",
+      paiseToRupees(c.creditLimit), paiseToRupees(c.creditBalance), c.isActive ? "Yes" : "No", c.createdAt,
+    ]);
+  }
+
+  await workbook.xlsx.writeFile(filePath);
+  console.log(`[ExportExcel] Customers snapshot: ${rows.length} row(s) -> ${filePath}`);
+}
+
+async function writeInventorySnapshot(filePath: string): Promise<void> {
+  const rows = exportRepo.getAllInventorySnapshot();
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet("Inventory");
+  sheet.addRow(["Product ID", "Product Name", "Unit", "Quantity", "Low Stock Alert", "Cost Price (₹)", "Stock Value (₹)"]);
+  sheet.getRow(1).font = { bold: true };
+
+  for (const i of rows) {
+    sheet.addRow([
+      i.productId, i.productName, i.unit, i.quantity, i.lowStockAlert,
+      paiseToRupees(i.costPrice), paiseToRupees(i.stockValue),
+    ]);
+  }
+
+  await workbook.xlsx.writeFile(filePath);
+  console.log(`[ExportExcel] Inventory snapshot: ${rows.length} row(s) -> ${filePath}`);
+}
+
+/**
+ * Month-end merge:
+ * - Sales/Khata: CONCATENATE all daily files for the month into one file
+ *   with two sheets/tabs. Source daily files are already correct, so we
+ *   just read and combine them — no need to re-query the database.
+ * - Products/Customers/Inventory: build a HISTORY file, one summary row
+ *   per day (not a full product list repeated 30 times), so the user can
+ *   see how totals changed across the month.
+ *
+ * Daily files are NEVER deleted after merging — this function only reads
+ * them and writes new monthly files. Do not add deletion logic here.
+ */
+const MONTH_NAMES = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
+];
+
+function pad2(n: number): string {
+  return String(n).padStart(2, "0");
+}
+
+function getDaysInMonth(year: number, month: number): number {
+  return new Date(year, month, 0).getDate();
+}
+
+async function readSheetRows(filePath: string): Promise<unknown[][]> {
+  if (!fs.existsSync(filePath)) return [];
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.readFile(filePath);
+  const sheet = workbook.worksheets[0];
+  if (!sheet) return [];
+  const rows: unknown[][] = [];
+  sheet.eachRow((row, rowNumber) => {
+    if (rowNumber === 1) return; // skip header, we write our own
+    const values: unknown[] = [];
+    row.eachCell({ includeEmpty: true }, (cell) => { values.push(cell.value); });
+    rows.push(values);
+  });
+  return rows;
+}
+
+async function mergeBillsAndKhata(year: number, month: number): Promise<void> {
+  const dailyDir = getDailyDir();
+  const daysInMonth = getDaysInMonth(year, month);
+  const monthLabel = `${MONTH_NAMES[month - 1]}_${year}`;
+
+  const workbook = new ExcelJS.Workbook();
+  const salesSheet = workbook.addWorksheet("Sales");
+  salesSheet.addRow([
+    "Bill ID", "Bill Number", "Customer", "Payment Method", "Status", "Item Count",
+    "Subtotal (₹)", "GST (₹)", "Discount (₹)", "Round Off (₹)", "Grand Total (₹)",
+    "Amount Paid (₹)", "Change Due (₹)", "Created At",
+  ]);
+  salesSheet.getRow(1).font = { bold: true };
+
+  const khataSheet = workbook.addWorksheet("Khata");
+  khataSheet.addRow(["Ledger ID", "Customer", "Type", "Amount (₹)", "Bill ID", "Note", "Created At"]);
+  khataSheet.getRow(1).font = { bold: true };
+
+  let totalSalesRows = 0;
+  let totalKhataRows = 0;
+
+  for (let day = 1; day <= daysInMonth; day++) {
+    const ymd = `${year}-${pad2(month)}-${pad2(day)}`;
+    const salesRows = await readSheetRows(path.join(dailyDir, `${ymd}-Sales.xlsx`));
+    const khataRows = await readSheetRows(path.join(dailyDir, `${ymd}-Khata.xlsx`));
+    for (const r of salesRows) { salesSheet.addRow(r); totalSalesRows++; }
+    for (const r of khataRows) { khataSheet.addRow(r); totalKhataRows++; }
+  }
+
+  const monthlyDir = getMonthlyDir();
+  const outPath = path.join(monthlyDir, `${monthLabel}_Complete_Bills.xlsx`);
+  await workbook.xlsx.writeFile(outPath);
+  console.log(`[ExportExcel] Monthly merge: ${totalSalesRows} sales row(s), ${totalKhataRows} khata row(s) -> ${outPath}`);
+}
+
+async function readSnapshotSummary(filePath: string, valueColumnIndex: number): Promise<{ count: number; totalValue: number } | null> {
+  if (!fs.existsSync(filePath)) return null;
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.readFile(filePath);
+  const sheet = workbook.worksheets[0];
+  if (!sheet) return null;
+  let count = 0;
+  let totalValue = 0;
+  sheet.eachRow((row, rowNumber) => {
+    if (rowNumber === 1) return;
+    count++;
+    const cell = row.getCell(valueColumnIndex).value;
+    if (typeof cell === "number") totalValue += cell;
+  });
+  return { count, totalValue };
+}
+
+async function mergeStockHistory(year: number, month: number): Promise<void> {
+  const dailyDir = getDailyDir();
+  const daysInMonth = getDaysInMonth(year, month);
+  const monthLabel = `${MONTH_NAMES[month - 1]}_${year}`;
+
+  const workbook = new ExcelJS.Workbook();
+
+  const productsSheet = workbook.addWorksheet("Products");
+  productsSheet.addRow(["Date", "Total Products", "Total Stock Value (₹, cost basis approx)"]);
+  productsSheet.getRow(1).font = { bold: true };
+
+  const customersSheet = workbook.addWorksheet("Customers");
+  customersSheet.addRow(["Date", "Total Customers", "Total Credit Balance Outstanding (₹)"]);
+  customersSheet.getRow(1).font = { bold: true };
+
+  const inventorySheet = workbook.addWorksheet("Inventory");
+  inventorySheet.addRow(["Date", "Total Tracked Products", "Total Stock Value (₹)"]);
+  inventorySheet.getRow(1).font = { bold: true };
+
+  for (let day = 1; day <= daysInMonth; day++) {
+    const ymd = `${year}-${pad2(month)}-${pad2(day)}`;
+
+    const productSummary = await readSnapshotSummary(path.join(dailyDir, `${ymd}-Products-snapshot.xlsx`), 6); // Cost Price col
+    if (productSummary) productsSheet.addRow([ymd, productSummary.count, productSummary.totalValue]);
+
+    const customerSummary = await readSnapshotSummary(path.join(dailyDir, `${ymd}-Customers-snapshot.xlsx`), 6); // Credit Balance col
+    if (customerSummary) customersSheet.addRow([ymd, customerSummary.count, customerSummary.totalValue]);
+
+    const inventorySummary = await readSnapshotSummary(path.join(dailyDir, `${ymd}-Inventory-snapshot.xlsx`), 7); // Stock Value col
+    if (inventorySummary) inventorySheet.addRow([ymd, inventorySummary.count, inventorySummary.totalValue]);
+  }
+
+  const monthlyDir = getMonthlyDir();
+  const outPath = path.join(monthlyDir, `${monthLabel}_Stock_History.xlsx`);
+  await workbook.xlsx.writeFile(outPath);
+  console.log(`[ExportExcel] Monthly stock history -> ${outPath}`);
+}
+
+export async function mergeMonthlyExport(year: number, month: number): Promise<void> {
+  await mergeBillsAndKhata(year, month);
+  await mergeStockHistory(year, month);
+}
+```
+
+
+F:\kirana-pos\features\backup\services\sheets-sync.service.ts
+
+```typescript
+import fs from "fs";
+import { GoogleSpreadsheet } from "google-spreadsheet";
+import { JWT } from "google-auth-library";
+import { settingsService } from "../../settings/services/settings.service";
+import { ExportRepository } from "../repositories/export.repository";
+import { backupService } from "./backup.service";
+import { getDatabase } from "../../../database/client";
+import { restoredProductSchema, restoredCustomerSchema } from "../schemas/restore.schemas";
+
+const exportRepo = new ExportRepository();
+const SCOPES = ["https://www.googleapis.com/auth/spreadsheets"];
+
+function paiseToRupees(paise: number): number {
+  return Math.round(paise) / 100;
+}
+function rupeesToPaise(rupees: number): number {
+  return Math.round(rupees * 100);
+}
+
+function toDateRange(date: Date): { startIso: string; endIso: string } {
+  const start = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 0, 0, 0, 0);
+  const end = new Date(date.getFullYear(), date.getMonth(), date.getDate() + 1, 0, 0, 0, 0);
+  return { startIso: start.toISOString(), endIso: end.toISOString() };
+}
+
+async function getDoc(): Promise<GoogleSpreadsheet | null> {
+  const settings = settingsService.getAll();
+  if (settings.googleSheetsEnabled !== "true") return null;
+  if (!settings.googleSheetsCredentialsPath || !settings.googleSheetsSpreadsheetId) return null;
+  if (!fs.existsSync(settings.googleSheetsCredentialsPath)) return null;
+
+  const raw = fs.readFileSync(settings.googleSheetsCredentialsPath, "utf-8");
+  const creds = JSON.parse(raw) as { client_email: string; private_key: string };
+
+  const jwt = new JWT({ email: creds.client_email, key: creds.private_key, scopes: SCOPES });
+  const doc = new GoogleSpreadsheet(settings.googleSheetsSpreadsheetId, jwt);
+  await doc.loadInfo();
+  return doc;
+}
+
+async function getOrCreateSheet(doc: GoogleSpreadsheet, title: string, headers: string[]) {
+  let sheet = doc.sheetsByTitle[title];
+  if (!sheet) sheet = await doc.addSheet({ title, headerValues: headers });
+  return sheet;
+}
+
+async function appendOnlyNewRows(
+  doc: GoogleSpreadsheet, title: string, headers: string[], idColumnHeader: string,
+  rows: { id: number; values: Record<string, unknown> }[]
+): Promise<number> {
+  const sheet = await getOrCreateSheet(doc, title, headers);
+  const existing = await sheet.getRows();
+  const existingIds = new Set(existing.map((r) => Number(r.get(idColumnHeader))));
+  const toAdd = rows.filter((r) => !existingIds.has(r.id)).map((r) => r.values);
+  if (toAdd.length > 0) await sheet.addRows(toAdd as Parameters<typeof sheet.addRows>[0]);
+  return toAdd.length;
+}
+
+async function upsertRows(
+  doc: GoogleSpreadsheet, title: string, headers: string[], idColumnHeader: string,
+  rows: { id: number; values: Record<string, unknown> }[]
+): Promise<void> {
+  const sheet = await getOrCreateSheet(doc, title, headers);
+  const existing = await sheet.getRows();
+  const existingById = new Map(existing.map((r) => [Number(r.get(idColumnHeader)), r]));
+  for (const row of rows) {
+    const existingRow = existingById.get(row.id);
+    if (existingRow) {
+      for (const [key, value] of Object.entries(row.values)) existingRow.set(key, value as string | number);
+      await existingRow.save();
+    } else {
+      await sheet.addRow(row.values as Parameters<typeof sheet.addRow>[0]);
+    }
+  }
+}
+
+export async function pushDailyDataToSheets(date: Date): Promise<void> {
+  try {
+    const doc = await getDoc();
+    if (!doc) {
+      console.log("[SheetsSync] Skipped — Google Sheets backup not enabled or not configured.");
+      return;
+    }
+
+    const { startIso, endIso } = toDateRange(date);
+
+    const bills = exportRepo.getBillsForDate(startIso, endIso);
+    const addedSales = await appendOnlyNewRows(doc, "Sales", [
+      "Bill ID", "Bill Number", "Customer", "Payment Method", "Status", "Item Count",
+      "Subtotal", "GST", "Discount", "Round Off", "Grand Total", "Amount Paid", "Change Due", "Created At",
+    ], "Bill ID", bills.map((b) => ({
+      id: b.id,
+      values: {
+        "Bill ID": b.id, "Bill Number": b.billNumber, "Customer": b.customerName ?? "Walk-in",
+        "Payment Method": b.paymentMethod, "Status": b.status, "Item Count": b.itemCount,
+        "Subtotal": paiseToRupees(b.subtotal), "GST": paiseToRupees(b.gstTotal), "Discount": paiseToRupees(b.discount),
+        "Round Off": paiseToRupees(b.roundOff), "Grand Total": paiseToRupees(b.grandTotal),
+        "Amount Paid": paiseToRupees(b.amountPaid), "Change Due": paiseToRupees(b.changeDue), "Created At": b.createdAt,
+      },
+    })));
+
+    const khata = exportRepo.getCreditLedgerForDate(startIso, endIso);
+    const addedKhata = await appendOnlyNewRows(doc, "Khata", [
+      "Ledger ID", "Customer", "Type", "Amount", "Bill ID", "Note", "Created At",
+    ], "Ledger ID", khata.map((k) => ({
+      id: k.id,
+      values: {
+        "Ledger ID": k.id, "Customer": k.customerName, "Type": k.type, "Amount": paiseToRupees(k.amount),
+        "Bill ID": k.billId ?? "", "Note": k.note ?? "", "Created At": k.createdAt,
+      },
+    })));
+
+    const products = exportRepo.getAllProductsSnapshot();
+    await upsertRows(doc, "Products", [
+      "Product ID", "Barcode", "Name", "Category", "Unit", "Cost Price", "Selling Price",
+      "MRP", "GST Rate", "HSN Code", "Low Stock Alert", "Active", "Current Stock", "Created At",
+    ], "Product ID", products.map((p) => ({
+      id: p.id,
+      values: {
+        "Product ID": p.id, "Barcode": p.barcode ?? "", "Name": p.name, "Category": p.categoryName ?? "",
+        "Unit": p.unit, "Cost Price": paiseToRupees(p.costPrice), "Selling Price": paiseToRupees(p.sellingPrice),
+        "MRP": paiseToRupees(p.mrp), "GST Rate": p.gstRate, "HSN Code": p.hsnCode ?? "",
+        "Low Stock Alert": p.lowStockAlert, "Active": p.isActive ? "Yes" : "No", "Current Stock": p.stock, "Created At": p.createdAt,
+      },
+    })));
+
+    const customers = exportRepo.getAllCustomersSnapshot();
+    await upsertRows(doc, "Customers", [
+      "Customer ID", "Name", "Phone", "Address", "Credit Limit", "Credit Balance", "Active", "Created At",
+    ], "Customer ID", customers.map((c) => ({
+      id: c.id,
+      values: {
+        "Customer ID": c.id, "Name": c.name, "Phone": c.phone ?? "", "Address": c.address ?? "",
+        "Credit Limit": paiseToRupees(c.creditLimit), "Credit Balance": paiseToRupees(c.creditBalance),
+        "Active": c.isActive ? "Yes" : "No", "Created At": c.createdAt,
+      },
+    })));
+
+    const inventory = exportRepo.getAllInventorySnapshot();
+    await upsertRows(doc, "Inventory", [
+      "Product ID", "Product Name", "Unit", "Quantity", "Low Stock Alert", "Cost Price", "Stock Value",
+    ], "Product ID", inventory.map((i) => ({
+      id: i.productId,
+      values: {
+        "Product ID": i.productId, "Product Name": i.productName, "Unit": i.unit, "Quantity": i.quantity,
+        "Low Stock Alert": i.lowStockAlert, "Cost Price": paiseToRupees(i.costPrice), "Stock Value": paiseToRupees(i.stockValue),
+      },
+    })));
+
+    console.log(`[SheetsSync] Pushed ${addedSales} new sale(s), ${addedKhata} new khata row(s), upserted ${products.length} products, ${customers.length} customers, ${inventory.length} inventory rows.`);
+  } catch (err) {
+    console.error("[SheetsSync] Push failed (local backup is unaffected):", err instanceof Error ? err.message : err);
+  }
+}
+
+/**
+ * Disaster recovery only — manual, explicit, NEVER automatic.
+ * Takes a pre-restore snapshot first (reusing the existing backup
+ * service), validates every row with Zod, writes through raw SQL
+ * upserts that mirror the existing repository column shapes (audit
+ * logging on these specific fields is intentionally skipped here since
+ * this is a bulk disaster-recovery operation, not a user-driven edit),
+ * and rolls back entirely on any failure via a single transaction.
+ */
+export async function restoreFromSheets(): Promise<{ restored: Record<string, number> }> {
+  const doc = await getDoc();
+  if (!doc) throw new Error("Google Sheets is not configured or enabled. Set it up in Settings first.");
+
+  // Pre-restore safety snapshot — reuses the existing local backup service.
+  backupService.create();
+
+  const db = getDatabase();
+  const restored: Record<string, number> = { products: 0, customers: 0 };
+
+  const productsSheet = doc.sheetsByTitle["Products"];
+  const customersSheet = doc.sheetsByTitle["Customers"];
+
+  const rawProductRows = productsSheet ? await productsSheet.getRows() : [];
+  const rawCustomerRows = customersSheet ? await customersSheet.getRows() : [];
+
+  const validProducts: { id: number; name: string; unit: string; costPrice: number; sellingPrice: number; mrp: number; gstRate: number }[] = [];
+  const rejectedProducts: number[] = [];
+
+  for (const row of rawProductRows) {
+    const parsed = restoredProductSchema.safeParse(row.toObject());
+    if (!parsed.success) { rejectedProducts.push(Number(row.get("Product ID"))); continue; }
+    const d = parsed.data;
+    validProducts.push({
+      id: Number(d["Product ID"]), name: d["Name"], unit: d["Unit"],
+      costPrice: rupeesToPaise(Number(d["Cost Price"])), sellingPrice: rupeesToPaise(Number(d["Selling Price"])),
+      mrp: rupeesToPaise(Number(d["MRP"])), gstRate: Number(d["GST Rate"]),
+    });
+  }
+
+  const validCustomers: { id: number; name: string; creditLimit: number; creditBalance: number }[] = [];
+  const rejectedCustomers: number[] = [];
+
+  for (const row of rawCustomerRows) {
+    const parsed = restoredCustomerSchema.safeParse(row.toObject());
+    if (!parsed.success) { rejectedCustomers.push(Number(row.get("Customer ID"))); continue; }
+    const d = parsed.data;
+    validCustomers.push({
+      id: Number(d["Customer ID"]), name: d["Name"],
+      creditLimit: rupeesToPaise(Number(d["Credit Limit"])), creditBalance: rupeesToPaise(Number(d["Credit Balance"])),
+    });
+  }
+
+  if (rejectedProducts.length > 0) console.warn(`[SheetsSync] Rejected ${rejectedProducts.length} invalid product row(s): ${rejectedProducts.join(", ")}`);
+  if (rejectedCustomers.length > 0) console.warn(`[SheetsSync] Rejected ${rejectedCustomers.length} invalid customer row(s): ${rejectedCustomers.join(", ")}`);
+
+  const now = new Date().toISOString();
+
+  const writeAll = db.transaction(() => {
+    const upsertProduct = db.prepare(
+      `INSERT INTO Product(id, name, unit, costPrice, sellingPrice, mrp, gstRate, createdAt, updatedAt)
+       VALUES (?,?,?,?,?,?,?,?,?)
+       ON CONFLICT(id) DO UPDATE SET name=excluded.name, unit=excluded.unit, costPrice=excluded.costPrice,
+         sellingPrice=excluded.sellingPrice, mrp=excluded.mrp, gstRate=excluded.gstRate, updatedAt=excluded.updatedAt`
+    );
+    for (const p of validProducts) {
+      upsertProduct.run(p.id, p.name, p.unit, p.costPrice, p.sellingPrice, p.mrp, p.gstRate, now, now);
+      restored["products"] = (restored["products"] ?? 0) + 1;
+    }
+
+    const upsertCustomer = db.prepare(
+      `INSERT INTO Customer(id, name, creditLimit, creditBalance, createdAt, updatedAt)
+       VALUES (?,?,?,?,?,?)
+       ON CONFLICT(id) DO UPDATE SET name=excluded.name, creditLimit=excluded.creditLimit,
+         creditBalance=excluded.creditBalance, updatedAt=excluded.updatedAt`
+    );
+    for (const c of validCustomers) {
+      upsertCustomer.run(c.id, c.name, c.creditLimit, c.creditBalance, now, now);
+      restored["customers"] = (restored["customers"] ?? 0) + 1;
+    }
+  });
+
+  try {
+    writeAll();
+  } catch (err) {
+    throw new Error(`Restore failed and was rolled back: ${err instanceof Error ? err.message : "Unknown error"}`);
+  }
+
+  return { restored };
+}
+```
+
+
 F:\kirana-pos\features\backup\types\index.ts
 
 ```typescript
+export interface BackupMeta { filename: string; path: string; sizeBytes: number; createdAt: string; }
+
+```
+
+
 F:\kirana-pos\features\billing\repositories\bill.repository.ts
 
 ```typescript
@@ -2817,6 +3754,12 @@ export const settingsService = {
       billCounter: map["billCounter"] ?? "1", taxIncluded: map["taxIncluded"] ?? "false",
       printReceiptAuto: map["printReceiptAuto"] ?? "true", theme: map["theme"] ?? "light",
       printerName: map["printerName"] ?? "", printerWidth: map["printerWidth"] ?? "80",
+      excelExportFolderPath: map["excelExportFolderPath"] ?? "",
+      lastDailySyncAt: map["lastDailySyncAt"] ?? "",
+      lastMonthlySyncAt: map["lastMonthlySyncAt"] ?? "",
+      googleSheetsEnabled: map["googleSheetsEnabled"] ?? "false",
+      googleSheetsCredentialsPath: map["googleSheetsCredentialsPath"] ?? "",
+      googleSheetsSpreadsheetId: map["googleSheetsSpreadsheetId"] ?? "",
     };
   },
   update(updates: Partial<AppSettings>): void {
@@ -2825,15 +3768,36 @@ export const settingsService = {
     db().transaction(() => { for (const [k,v] of Object.entries(updates)) if (v !== undefined) stmt.run(k, String(v), now); })();
   },
 };
-
 ```
 
 
 F:\kirana-pos\features\settings\types\index.ts
 
 ```typescript
-export interface AppSettings { storeName:string; storeAddress:string; storePhone:string; storeGstin:string; currency:string; billPrefix:string; billCounter:string; taxIncluded:string; printReceiptAuto:string; theme:string; printerName:string; printerWidth:string; }
-
+export interface AppSettings { storeName:string; 
+    storeAddress:string; 
+    storePhone:string; 
+    storeGstin:string; 
+    currency:string; 
+    billPrefix:string; 
+    billCounter:string; 
+    taxIncluded:string; 
+    printReceiptAuto:string; 
+    theme:string; 
+    printerName:string; 
+    printerWidth:string; 
+}
+export interface AppSettings {
+    storeName: string; storeAddress: string; storePhone: string; storeGstin: string;
+    currency: string; billPrefix: string; billCounter: string; taxIncluded: string;
+    printReceiptAuto: string; theme: string; printerName: string; printerWidth: string;
+    excelExportFolderPath: string;
+    lastDailySyncAt: string;
+    lastMonthlySyncAt: string;
+    googleSheetsEnabled: string;
+    googleSheetsCredentialsPath: string;
+    googleSheetsSpreadsheetId: string;
+  }
 ```
 
 
@@ -2866,6 +3830,62 @@ export function ManagementLayout({ children }: { children: React.ReactNode }) {
 
 
 F:\kirana-pos\shared\components\layout\sidebar.tsx
+
+```typescriptreact
+"use client";
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+import { LayoutDashboard, Package, Tag, BarChart3, Users, Receipt, FileText, Settings, Database, ClipboardList, BookOpen, LogOut, ChevronLeft, ChevronRight } from "lucide-react";
+import { cn } from "@/shared/lib/utils";
+import { useAppStore } from "@/shared/stores/app.store";
+import { Button } from "@/shared/components/ui/button";
+
+const NAV = [
+  { href: "/dashboard",  label: "Dashboard",   icon: LayoutDashboard },
+  { href: "/billing",    label: "Billing POS", icon: Receipt },
+  { href: "/products",   label: "Products",    icon: Package },
+  { href: "/categories", label: "Categories",  icon: Tag },
+  { href: "/inventory",  label: "Inventory",   icon: BarChart3 },
+  { href: "/customers",  label: "Customers",   icon: Users },
+  { href: "/khata",      label: "Khata/Udhar", icon: BookOpen },
+  { href: "/reports",    label: "Reports",     icon: FileText },
+  { href: "/audit",      label: "Audit Logs",  icon: ClipboardList },
+  { href: "/backup",     label: "Backup",      icon: Database },
+  { href: "/settings",   label: "Settings",    icon: Settings },
+];
+
+export function Sidebar() {
+  const pathname = usePathname();
+  const { sidebarOpen, toggleSidebar, user, setUser } = useAppStore();
+  return (
+    <aside className={cn("flex flex-col h-full bg-card border-r transition-all duration-300 shrink-0", sidebarOpen ? "w-56" : "w-14")}>
+      <div className="flex items-center justify-between px-3 py-4 border-b">
+        {sidebarOpen && <span className="font-bold text-lg text-primary truncate">KiranaPOS</span>}
+        <Button variant="ghost" size="icon" onClick={toggleSidebar} className="ml-auto shrink-0">
+          {sidebarOpen ? <ChevronLeft className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+        </Button>
+      </div>
+      <nav className="flex-1 overflow-y-auto py-2 space-y-0.5 px-1.5">
+        {NAV.map(({ href, label, icon: Icon }) => {
+          const active = pathname === href || pathname.startsWith(href + "/");
+          return (
+            <Link key={href} href={href} className={cn("flex items-center gap-3 rounded-md px-2 py-2 text-sm font-medium transition-colors", active ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-accent hover:text-accent-foreground")}>
+              <Icon className="h-4 w-4 shrink-0" />
+              {sidebarOpen && <span className="truncate">{label}</span>}
+            </Link>
+          );
+        })}
+      </nav>
+      <div className="border-t p-2">
+        {sidebarOpen && user && <p className="text-xs text-muted-foreground truncate px-2 pb-1">{user.username} · {user.role}</p>}
+        <Button variant="ghost" size={sidebarOpen ? "sm" : "icon"} className="w-full justify-start gap-3 text-muted-foreground" onClick={() => setUser(null)}>
+          <LogOut className="h-4 w-4 shrink-0" />{sidebarOpen && "Sign out"}
+        </Button>
+      </div>
+    </aside>
+  );
+}
+
 ```
 
 
@@ -3099,6 +4119,8 @@ const Label = React.forwardRef<React.ElementRef<typeof LabelPrimitive.Root>, Rea
 );
 Label.displayName = LabelPrimitive.Root.displayName;
 export { Label };
+
+```
 
 
 F:\kirana-pos\shared\components\ui\select.tsx
@@ -3410,15 +4432,21 @@ export const IPC_CHANNELS = {
   REPORT_STOCK_VALUATION: "report:stockValuation",
   SETTINGS_GET_ALL: "settings:getAll", SETTINGS_UPDATE: "settings:update",
   BACKUP_CREATE: "backup:create", BACKUP_RESTORE: "backup:restore", BACKUP_LIST: "backup:list",
+  BACKUP_PICK_EXPORT_FOLDER: "backup:pickExportFolder",
+  BACKUP_PICK_CREDENTIALS_FILE: "backup:pickCredentialsFile",
+  SYNC_NOW: "sync:now",
+  SYNC_MERGE_MONTH: "sync:mergeMonth",
+  SYNC_RESTORE_FROM_SHEETS: "sync:restoreFromSheets",
   AUDIT_GET_LOGS: "audit:getLogs",
   APP_GET_VERSION: "app:getVersion",
 } as const;
 
 export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];
 export type IpcResponse<T> = { success: true; data: T } | { success: false; error: string };
-
 ```
 
+
+F:\kirana-pos\tests\e2e\login.spec.ts
 
 ```typescript
 import { test, expect } from "@playwright/test";
@@ -3520,6 +4548,8 @@ describe("generateBillNumber", () => {
 
 ```
 
+
+F:\kirana-pos\.eslintrc.json
 
 ```json
 {
@@ -3627,6 +4657,9 @@ F:\kirana-pos\package-lock.json
         "class-variance-authority": "^0.7.1",
         "clsx": "^2.1.1",
         "date-fns": "^3.6.0",
+        "exceljs": "^4.4.0",
+        "google-auth-library": "^10.9.0",
+        "google-spreadsheet": "^4.1.5",
         "lucide-react": "^0.468.0",
         "next": "15.1.3",
         "react": "^19.0.0",
@@ -3643,6 +4676,7 @@ F:\kirana-pos\package-lock.json
         "@testing-library/jest-dom": "^6.6.3",
         "@testing-library/react": "^16.1.0",
         "@types/better-sqlite3": "^7.6.12",
+        "@types/exceljs": "^0.5.3",
         "@types/node": "^20",
         "@types/react": "^19",
         "@types/react-dom": "^19",
@@ -4924,6 +5958,47 @@ F:\kirana-pos\package-lock.json
       "engines": {
         "node": "^12.22.0 || ^14.17.0 || >=16.0.0"
       }
+    },
+    "node_modules/@fast-csv/format": {
+      "version": "4.3.5",
+      "resolved": "https://registry.npmjs.org/@fast-csv/format/-/format-4.3.5.tgz",
+      "integrity": "sha512-8iRn6QF3I8Ak78lNAa+Gdl5MJJBM5vRHivFtMRUWINdevNo00K7OXxS2PshawLKTejVwieIlPmK5YlLu6w4u8A==",
+      "license": "MIT",
+      "dependencies": {
+        "@types/node": "^14.0.1",
+        "lodash.escaperegexp": "^4.1.2",
+        "lodash.isboolean": "^3.0.3",
+        "lodash.isequal": "^4.5.0",
+        "lodash.isfunction": "^3.0.9",
+        "lodash.isnil": "^4.0.0"
+      }
+    },
+    "node_modules/@fast-csv/format/node_modules/@types/node": {
+      "version": "14.18.63",
+      "resolved": "https://registry.npmjs.org/@types/node/-/node-14.18.63.tgz",
+      "integrity": "sha512-fAtCfv4jJg+ExtXhvCkCqUKZ+4ok/JQk01qDKhL5BDDoS3AxKXhV5/MAVUZyQnSEd2GT92fkgZl0pz0Q0AzcIQ==",
+      "license": "MIT"
+    },
+    "node_modules/@fast-csv/parse": {
+      "version": "4.3.6",
+      "resolved": "https://registry.npmjs.org/@fast-csv/parse/-/parse-4.3.6.tgz",
+      "integrity": "sha512-uRsLYksqpbDmWaSmzvJcuApSEe38+6NQZBUsuAyMZKqHxH0g1wcJgsKUvN3WC8tewaqFjBMMGrkHmC+T7k8LvA==",
+      "license": "MIT",
+      "dependencies": {
+        "@types/node": "^14.0.1",
+        "lodash.escaperegexp": "^4.1.2",
+        "lodash.groupby": "^4.6.0",
+        "lodash.isfunction": "^3.0.9",
+        "lodash.isnil": "^4.0.0",
+        "lodash.isundefined": "^3.0.1",
+        "lodash.uniq": "^4.5.0"
+      }
+    },
+    "node_modules/@fast-csv/parse/node_modules/@types/node": {
+      "version": "14.18.63",
+      "resolved": "https://registry.npmjs.org/@types/node/-/node-14.18.63.tgz",
+      "integrity": "sha512-fAtCfv4jJg+ExtXhvCkCqUKZ+4ok/JQk01qDKhL5BDDoS3AxKXhV5/MAVUZyQnSEd2GT92fkgZl0pz0Q0AzcIQ==",
+      "license": "MIT"
     },
     "node_modules/@floating-ui/core": {
       "version": "1.7.5",
@@ -7709,6 +8784,16 @@ F:\kirana-pos\package-lock.json
       "dev": true,
       "license": "MIT"
     },
+    "node_modules/@types/exceljs": {
+      "version": "0.5.3",
+      "resolved": "https://registry.npmjs.org/@types/exceljs/-/exceljs-0.5.3.tgz",
+      "integrity": "sha512-a0PLZEJGbA4kHHoSS8cQ20ynIv17vCBV1reqsrX5ksQQb077YYvhEKC82lEq6/+mMufhk68KJ5jwugL3DKG8sQ==",
+      "dev": true,
+      "license": "MIT",
+      "dependencies": {
+        "@types/node": "*"
+      }
+    },
     "node_modules/@types/fs-extra": {
       "version": "9.0.13",
       "resolved": "https://registry.npmjs.org/@types/fs-extra/-/fs-extra-9.0.13.tgz",
@@ -8678,7 +9763,6 @@ F:\kirana-pos\package-lock.json
       "version": "7.1.4",
       "resolved": "https://registry.npmjs.org/agent-base/-/agent-base-7.1.4.tgz",
       "integrity": "sha512-MnA+YT8fwfJPgBx3m60MNqakm30XOkyIoH1y6huTQvC0PwZG7ki8NacLBcrPbNoo8vEZy7Jpuk7+jMO+CUovTQ==",
-      "dev": true,
       "license": "MIT",
       "engines": {
         "node": ">= 14"
@@ -8801,9 +9885,7 @@ F:\kirana-pos\package-lock.json
       "version": "5.3.2",
       "resolved": "https://registry.npmjs.org/archiver/-/archiver-5.3.2.tgz",
       "integrity": "sha512-+25nxyyznAXF7Nef3y0EbBeqmGZgeN/BxHX29Rs39djAfaFalmQ89SE6CWyDCHzGL0yt/ycBtNOmGTW0FyGWNw==",
-      "dev": true,
       "license": "MIT",
-      "peer": true,
       "dependencies": {
         "archiver-utils": "^2.1.0",
         "async": "^3.2.4",
@@ -8821,9 +9903,7 @@ F:\kirana-pos\package-lock.json
       "version": "2.1.0",
       "resolved": "https://registry.npmjs.org/archiver-utils/-/archiver-utils-2.1.0.tgz",
       "integrity": "sha512-bEL/yUb/fNNiNTuUz979Z0Yg5L+LzLxGJz8x79lYmR54fmTIb6ob/hNQgkQnIUDWIFjZVQwl9Xs356I6BAMHfw==",
-      "dev": true,
       "license": "MIT",
-      "peer": true,
       "dependencies": {
         "glob": "^7.1.4",
         "graceful-fs": "^4.2.0",
@@ -8844,17 +9924,13 @@ F:\kirana-pos\package-lock.json
       "version": "1.0.0",
       "resolved": "https://registry.npmjs.org/isarray/-/isarray-1.0.0.tgz",
       "integrity": "sha512-VLghIWNM6ELQzo7zwmcg0NmTVyWKYjvIeM83yjp0wRDTmUnrM678fQbcKBo6n2CJEF0szoG//ytg+TKla89ALQ==",
-      "dev": true,
-      "license": "MIT",
-      "peer": true
+      "license": "MIT"
     },
     "node_modules/archiver-utils/node_modules/readable-stream": {
       "version": "2.3.8",
       "resolved": "https://registry.npmjs.org/readable-stream/-/readable-stream-2.3.8.tgz",
       "integrity": "sha512-8p0AUk4XODgIewSi0l8Epjs+EVnWiK7NoDIEGU0HhE7+ZyY8D1IMY7odu5lRrFXGg71L15KG8QrPmum45RTtdA==",
-      "dev": true,
       "license": "MIT",
-      "peer": true,
       "dependencies": {
         "core-util-is": "~1.0.0",
         "inherits": "~2.0.3",
@@ -8869,17 +9945,13 @@ F:\kirana-pos\package-lock.json
       "version": "5.1.2",
       "resolved": "https://registry.npmjs.org/safe-buffer/-/safe-buffer-5.1.2.tgz",
       "integrity": "sha512-Gd2UZBJDkXlY7GbJxfsE8/nvKkUEU1G38c1siN6QP6a9PT9MmHB8GnpscSmMJSoF8LOIrt8ud/wPtojys4G6+g==",
-      "dev": true,
-      "license": "MIT",
-      "peer": true
+      "license": "MIT"
     },
     "node_modules/archiver-utils/node_modules/string_decoder": {
       "version": "1.1.1",
       "resolved": "https://registry.npmjs.org/string_decoder/-/string_decoder-1.1.1.tgz",
       "integrity": "sha512-n/ShnvDi6FHbbVfviro+WojiFzv+s8MPMHBczVePfUpDJLwoLT0ht1l4YwBCbi8pJAveEEdnkHyPyTP/mzRfwg==",
-      "dev": true,
       "license": "MIT",
-      "peer": true,
       "dependencies": {
         "safe-buffer": "~5.1.0"
       }
@@ -9137,7 +10209,6 @@ F:\kirana-pos\package-lock.json
       "version": "3.2.6",
       "resolved": "https://registry.npmjs.org/async/-/async-3.2.6.tgz",
       "integrity": "sha512-htCUDlxyyCLMgaM3xXg0C0LW2xqfuQ6p05pCEIsXuyQ+a1koYKTuBMzRNwmybfLgvJDMd0r1LTn4+E0Ti6C2AA==",
-      "dev": true,
       "license": "MIT"
     },
     "node_modules/async-exit-hook": {
@@ -9164,7 +10235,6 @@ F:\kirana-pos\package-lock.json
       "version": "0.4.0",
       "resolved": "https://registry.npmjs.org/asynckit/-/asynckit-0.4.0.tgz",
       "integrity": "sha512-Oei9OH4tRh0YqU3GxhX79dM/mwVgvbZJaSNaRk+bshkj0S5cfHcgYakreBjrHwatXKbz+IoIdYLxrKim2MjW0Q==",
-      "dev": true,
       "license": "MIT"
     },
     "node_modules/at-least-node": {
@@ -9203,6 +10273,43 @@ F:\kirana-pos\package-lock.json
         "node": ">=4"
       }
     },
+    "node_modules/axios": {
+      "version": "1.18.1",
+      "resolved": "https://registry.npmjs.org/axios/-/axios-1.18.1.tgz",
+      "integrity": "sha512-3nTvFlvpn9Zu/RkHUqtc7/+al4UpRW5az71ap5zccp6e8RAYEzhMTecX8Dz1wWDYrPpUoB1HAQEGEAEvUr7S9g==",
+      "license": "MIT",
+      "dependencies": {
+        "follow-redirects": "^1.16.0",
+        "form-data": "^4.0.5",
+        "https-proxy-agent": "^5.0.1",
+        "proxy-from-env": "^2.1.0"
+      }
+    },
+    "node_modules/axios/node_modules/agent-base": {
+      "version": "6.0.2",
+      "resolved": "https://registry.npmjs.org/agent-base/-/agent-base-6.0.2.tgz",
+      "integrity": "sha512-RZNwNclF7+MS/8bDg70amg32dyeZGZxiDuQmZxKLAlQjr3jGyLx+4Kkk58UO7D2QdgFIQCovuSuZESne6RG6XQ==",
+      "license": "MIT",
+      "dependencies": {
+        "debug": "4"
+      },
+      "engines": {
+        "node": ">= 6.0.0"
+      }
+    },
+    "node_modules/axios/node_modules/https-proxy-agent": {
+      "version": "5.0.1",
+      "resolved": "https://registry.npmjs.org/https-proxy-agent/-/https-proxy-agent-5.0.1.tgz",
+      "integrity": "sha512-dFcAjpTQFgoLMzC2VwU+C/CbS7uRL0lWmxDITmqm7C+7F0Odmj6s9l6alZc6AELXhrnggM2CeWSXHGOdX2YtwA==",
+      "license": "MIT",
+      "dependencies": {
+        "agent-base": "6",
+        "debug": "4"
+      },
+      "engines": {
+        "node": ">= 6"
+      }
+    },
     "node_modules/axobject-query": {
       "version": "4.1.0",
       "resolved": "https://registry.npmjs.org/axobject-query/-/axobject-query-4.1.0.tgz",
@@ -9217,7 +10324,6 @@ F:\kirana-pos\package-lock.json
       "version": "1.0.2",
       "resolved": "https://registry.npmjs.org/balanced-match/-/balanced-match-1.0.2.tgz",
       "integrity": "sha512-3oSeUO0TMV67hN1AmbXsK4yaqU7tjiHlbxRDZOpH0KW9+CeX4bRAaX0Anxt0tx2MrpRpWwQaPwIlISEJhYU5Pw==",
-      "dev": true,
       "license": "MIT"
     },
     "node_modules/base64-js": {
@@ -9265,6 +10371,37 @@ F:\kirana-pos\package-lock.json
       },
       "engines": {
         "node": "20.x || 22.x || 23.x || 24.x || 25.x || 26.x"
+      }
+    },
+    "node_modules/big-integer": {
+      "version": "1.6.52",
+      "resolved": "https://registry.npmjs.org/big-integer/-/big-integer-1.6.52.tgz",
+      "integrity": "sha512-QxD8cf2eVqJOOz63z6JIN9BzvVs/dlySa5HGSBH5xtR8dPteIRQnBxxKqkNTiT6jbDTF6jAfrd4oMcND9RGbQg==",
+      "license": "Unlicense",
+      "engines": {
+        "node": ">=0.6"
+      }
+    },
+    "node_modules/bignumber.js": {
+      "version": "9.3.1",
+      "resolved": "https://registry.npmjs.org/bignumber.js/-/bignumber.js-9.3.1.tgz",
+      "integrity": "sha512-Ko0uX15oIUS7wJ3Rb30Fs6SkVbLmPBAKdlm7q9+ak9bbIeFf0MwuBsQV6z7+X768/cHsfg+WlysDWJcmthjsjQ==",
+      "license": "MIT",
+      "engines": {
+        "node": "*"
+      }
+    },
+    "node_modules/binary": {
+      "version": "0.3.0",
+      "resolved": "https://registry.npmjs.org/binary/-/binary-0.3.0.tgz",
+      "integrity": "sha512-D4H1y5KYwpJgK8wk1Cue5LLPgmwHKYSChkbspQg5JtVuR5ulGckxfR62H3AE9UDkdMC8yyXlqYihuz3Aqg2XZg==",
+      "license": "MIT",
+      "dependencies": {
+        "buffers": "~0.1.1",
+        "chainsaw": "~0.1.0"
+      },
+      "engines": {
+        "node": "*"
       }
     },
     "node_modules/binary-extensions": {
@@ -9329,7 +10466,6 @@ F:\kirana-pos\package-lock.json
       "version": "1.1.15",
       "resolved": "https://registry.npmjs.org/brace-expansion/-/brace-expansion-1.1.15.tgz",
       "integrity": "sha512-EwOCDEex4quD37XhqM3omwtMoJjr//isUZz1JopUNWms+4Z2ViyM/k1YIRePpoVNnQhENnxtFjLaxNHrT7xIUg==",
-      "dev": true,
       "license": "MIT",
       "dependencies": {
         "balanced-match": "^1.0.0",
@@ -9410,11 +10546,16 @@ F:\kirana-pos\package-lock.json
       "version": "0.2.13",
       "resolved": "https://registry.npmjs.org/buffer-crc32/-/buffer-crc32-0.2.13.tgz",
       "integrity": "sha512-VO9Ht/+p3SN7SKWqcrgEzjGbRSJYTx+Q1pTQC0wrWqHx0vpJraQ6GtHx8tvcg1rlK1byhU5gccxgOgj7B0TDkQ==",
-      "dev": true,
       "license": "MIT",
       "engines": {
         "node": "*"
       }
+    },
+    "node_modules/buffer-equal-constant-time": {
+      "version": "1.0.1",
+      "resolved": "https://registry.npmjs.org/buffer-equal-constant-time/-/buffer-equal-constant-time-1.0.1.tgz",
+      "integrity": "sha512-zRpUiDwd/xk6ADqPMATG8vc9VPrkck7T07OIx0gnjmJAnHnTVXNQG3vfvWNuiZIkwu9KrKdA1iJKfsfTVxE6NA==",
+      "license": "BSD-3-Clause"
     },
     "node_modules/buffer-from": {
       "version": "1.1.2",
@@ -9422,6 +10563,23 @@ F:\kirana-pos\package-lock.json
       "integrity": "sha512-E+XQCRwSbaaiChtv6k6Dwgc+bx+Bs6vuKJHHl5kox/BaKbhiXzqQOwK4cO22yElGp2OCmjwVhT3HmxgyPGnJfQ==",
       "dev": true,
       "license": "MIT"
+    },
+    "node_modules/buffer-indexof-polyfill": {
+      "version": "1.0.2",
+      "resolved": "https://registry.npmjs.org/buffer-indexof-polyfill/-/buffer-indexof-polyfill-1.0.2.tgz",
+      "integrity": "sha512-I7wzHwA3t1/lwXQh+A5PbNvJxgfo5r3xulgpYDB5zckTu/Z9oUK9biouBKQUjEqzaz3HnAT6TYoovmE+GqSf7A==",
+      "license": "MIT",
+      "engines": {
+        "node": ">=0.10"
+      }
+    },
+    "node_modules/buffers": {
+      "version": "0.1.1",
+      "resolved": "https://registry.npmjs.org/buffers/-/buffers-0.1.1.tgz",
+      "integrity": "sha512-9q/rDEGSb/Qsvv2qvzIzdluL5k7AaJOTrw23z9reQthrbF7is4CtlT0DXyO1oei2DCp4uojjzQ7igaSHp1kAEQ==",
+      "engines": {
+        "node": ">=0.2.0"
+      }
     },
     "node_modules/builder-util": {
       "version": "25.1.7",
@@ -9677,7 +10835,6 @@ F:\kirana-pos\package-lock.json
       "version": "1.0.2",
       "resolved": "https://registry.npmjs.org/call-bind-apply-helpers/-/call-bind-apply-helpers-1.0.2.tgz",
       "integrity": "sha512-Sp1ablJ0ivDkSzjcaJdxEunN5/XvksFJ2sMBFfq6x0ryhQV/2b/KwFe21cMpmHtPOSij8K99/wSfoEuTObmuMQ==",
-      "dev": true,
       "license": "MIT",
       "dependencies": {
         "es-errors": "^1.3.0",
@@ -9758,6 +10915,18 @@ F:\kirana-pos\package-lock.json
       },
       "engines": {
         "node": ">=18"
+      }
+    },
+    "node_modules/chainsaw": {
+      "version": "0.1.0",
+      "resolved": "https://registry.npmjs.org/chainsaw/-/chainsaw-0.1.0.tgz",
+      "integrity": "sha512-75kWfWt6MEKNC8xYXIdRpDehRYY/tNSgwKaJq+dbbDcxORuVrrQ+SEHoWsniVn9XPYfP4gmdWIeDk/4YNp1rNQ==",
+      "license": "MIT/X11",
+      "dependencies": {
+        "traverse": ">=0.3.0 <0.4"
+      },
+      "engines": {
+        "node": "*"
       }
     },
     "node_modules/chalk": {
@@ -10057,7 +11226,6 @@ F:\kirana-pos\package-lock.json
       "version": "1.0.8",
       "resolved": "https://registry.npmjs.org/combined-stream/-/combined-stream-1.0.8.tgz",
       "integrity": "sha512-FQN4MRfuJeHf7cBbBMJFXhKSDq+2kAArBlmRBvcvFE5BB1HZKXtSFASDhdlz9zOYwxh8lDdnvmMOe/+5cdoEdg==",
-      "dev": true,
       "license": "MIT",
       "dependencies": {
         "delayed-stream": "~1.0.0"
@@ -10089,9 +11257,7 @@ F:\kirana-pos\package-lock.json
       "version": "4.1.2",
       "resolved": "https://registry.npmjs.org/compress-commons/-/compress-commons-4.1.2.tgz",
       "integrity": "sha512-D3uMHtGc/fcO1Gt1/L7i1e33VOvD4A9hfQLP+6ewd+BvG/gQ84Yh4oftEhAdjSMgBgwGL+jsppT7JYNpo6MHHg==",
-      "dev": true,
       "license": "MIT",
-      "peer": true,
       "dependencies": {
         "buffer-crc32": "^0.2.13",
         "crc32-stream": "^4.0.2",
@@ -10106,7 +11272,6 @@ F:\kirana-pos\package-lock.json
       "version": "0.0.1",
       "resolved": "https://registry.npmjs.org/concat-map/-/concat-map-0.0.1.tgz",
       "integrity": "sha512-/Srv4dswyQNBfohGpz9o6Yb3Gz3SrUDqBH5rTuhGR7ahtlbYKnVxw2bCFMRljaA7EXHaXZ8wsHdodFvbkhKmqg==",
-      "dev": true,
       "license": "MIT"
     },
     "node_modules/concurrently": {
@@ -10285,7 +11450,6 @@ F:\kirana-pos\package-lock.json
       "version": "1.0.2",
       "resolved": "https://registry.npmjs.org/core-util-is/-/core-util-is-1.0.2.tgz",
       "integrity": "sha512-3lqz5YjWTYnW6dlDa5TLaTCcShfar1e40rmcJVwCBJC6mWlFuj0eCHIElmG1g5kyuJ/GD+8Wn4FFCcz4gJPfaQ==",
-      "dev": true,
       "license": "MIT"
     },
     "node_modules/crc": {
@@ -10303,9 +11467,7 @@ F:\kirana-pos\package-lock.json
       "version": "1.2.2",
       "resolved": "https://registry.npmjs.org/crc-32/-/crc-32-1.2.2.tgz",
       "integrity": "sha512-ROmzCKrTnOwybPcJApAA6WBWij23HVfGVNKqqrZpuyZOHqK2CwHSvpGuyt/UNNvaIjEd8X5IFGp4Mh+Ie1IHJQ==",
-      "dev": true,
       "license": "Apache-2.0",
-      "peer": true,
       "bin": {
         "crc32": "bin/crc32.njs"
       },
@@ -10317,9 +11479,7 @@ F:\kirana-pos\package-lock.json
       "version": "4.0.3",
       "resolved": "https://registry.npmjs.org/crc32-stream/-/crc32-stream-4.0.3.tgz",
       "integrity": "sha512-NT7w2JVU7DFroFdYkeq8cywxrgjPHWkdX1wjpRQXPX5Asews3tA+Ght6lddQO5Mkumffp3X7GEqku3epj2toIw==",
-      "dev": true,
       "license": "MIT",
-      "peer": true,
       "dependencies": {
         "crc-32": "^1.2.0",
         "readable-stream": "^3.4.0"
@@ -10425,6 +11585,15 @@ F:\kirana-pos\package-lock.json
       "dev": true,
       "license": "BSD-2-Clause"
     },
+    "node_modules/data-uri-to-buffer": {
+      "version": "4.0.1",
+      "resolved": "https://registry.npmjs.org/data-uri-to-buffer/-/data-uri-to-buffer-4.0.1.tgz",
+      "integrity": "sha512-0R9ikRb668HB7QDxT1vkpuUBtqc53YyAwMwGeUFKRojY/NWKvdZ+9UYtRfGmhqNbRkTSVpMbmyhXipFFv2cb/A==",
+      "license": "MIT",
+      "engines": {
+        "node": ">= 12"
+      }
+    },
     "node_modules/data-urls": {
       "version": "5.0.0",
       "resolved": "https://registry.npmjs.org/data-urls/-/data-urls-5.0.0.tgz",
@@ -10503,11 +11672,16 @@ F:\kirana-pos\package-lock.json
         "url": "https://github.com/sponsors/kossnocorp"
       }
     },
+    "node_modules/dayjs": {
+      "version": "1.11.21",
+      "resolved": "https://registry.npmjs.org/dayjs/-/dayjs-1.11.21.tgz",
+      "integrity": "sha512-98IT+HOahAisibz/yjKbzuOBwYcjJ7BCLPzARyHiyEBmRz4fatF+KPJszEHXsGYjUG234aH/cOjW1wwTbKUZlA==",
+      "license": "MIT"
+    },
     "node_modules/debug": {
       "version": "4.4.3",
       "resolved": "https://registry.npmjs.org/debug/-/debug-4.4.3.tgz",
       "integrity": "sha512-RGwwWnwQvkVfavKVt22FGLw+xYSdzARwm0ru6DhTVA3umU5hZc28V3kO4stgYryrTlLpuvgI9GiijltAjNbcqA==",
-      "dev": true,
       "license": "MIT",
       "dependencies": {
         "ms": "^2.1.3"
@@ -10632,7 +11806,6 @@ F:\kirana-pos\package-lock.json
       "version": "1.0.0",
       "resolved": "https://registry.npmjs.org/delayed-stream/-/delayed-stream-1.0.0.tgz",
       "integrity": "sha512-ZySD7Nf91aLB0RxL4KGrKHBXl7Eds1DAmEdcoVawXnLD7SDhpNgtuII2aAkg7a7QS41jxPSZ17p4VdGnMHk3MQ==",
-      "dev": true,
       "license": "MIT",
       "engines": {
         "node": ">=0.4.0"
@@ -11065,7 +12238,6 @@ F:\kirana-pos\package-lock.json
       "version": "1.0.1",
       "resolved": "https://registry.npmjs.org/dunder-proto/-/dunder-proto-1.0.1.tgz",
       "integrity": "sha512-KIN/nDJBQRcXw0MLVhZE9iQHmG68qAVIBg9CqmUYjmQIhgij9U5MFvrqkUL5FbtyyzZuOeOt0zdeRe4UY7ct+A==",
-      "dev": true,
       "license": "MIT",
       "dependencies": {
         "call-bind-apply-helpers": "^1.0.1",
@@ -11076,12 +12248,66 @@ F:\kirana-pos\package-lock.json
         "node": ">= 0.4"
       }
     },
+    "node_modules/duplexer2": {
+      "version": "0.1.4",
+      "resolved": "https://registry.npmjs.org/duplexer2/-/duplexer2-0.1.4.tgz",
+      "integrity": "sha512-asLFVfWWtJ90ZyOUHMqk7/S2w2guQKxUI2itj3d92ADHhxUSbCMGi1f1cBcJ7xM1To+pE/Khbwo1yuNbMEPKeA==",
+      "license": "BSD-3-Clause",
+      "dependencies": {
+        "readable-stream": "^2.0.2"
+      }
+    },
+    "node_modules/duplexer2/node_modules/isarray": {
+      "version": "1.0.0",
+      "resolved": "https://registry.npmjs.org/isarray/-/isarray-1.0.0.tgz",
+      "integrity": "sha512-VLghIWNM6ELQzo7zwmcg0NmTVyWKYjvIeM83yjp0wRDTmUnrM678fQbcKBo6n2CJEF0szoG//ytg+TKla89ALQ==",
+      "license": "MIT"
+    },
+    "node_modules/duplexer2/node_modules/readable-stream": {
+      "version": "2.3.8",
+      "resolved": "https://registry.npmjs.org/readable-stream/-/readable-stream-2.3.8.tgz",
+      "integrity": "sha512-8p0AUk4XODgIewSi0l8Epjs+EVnWiK7NoDIEGU0HhE7+ZyY8D1IMY7odu5lRrFXGg71L15KG8QrPmum45RTtdA==",
+      "license": "MIT",
+      "dependencies": {
+        "core-util-is": "~1.0.0",
+        "inherits": "~2.0.3",
+        "isarray": "~1.0.0",
+        "process-nextick-args": "~2.0.0",
+        "safe-buffer": "~5.1.1",
+        "string_decoder": "~1.1.1",
+        "util-deprecate": "~1.0.1"
+      }
+    },
+    "node_modules/duplexer2/node_modules/safe-buffer": {
+      "version": "5.1.2",
+      "resolved": "https://registry.npmjs.org/safe-buffer/-/safe-buffer-5.1.2.tgz",
+      "integrity": "sha512-Gd2UZBJDkXlY7GbJxfsE8/nvKkUEU1G38c1siN6QP6a9PT9MmHB8GnpscSmMJSoF8LOIrt8ud/wPtojys4G6+g==",
+      "license": "MIT"
+    },
+    "node_modules/duplexer2/node_modules/string_decoder": {
+      "version": "1.1.1",
+      "resolved": "https://registry.npmjs.org/string_decoder/-/string_decoder-1.1.1.tgz",
+      "integrity": "sha512-n/ShnvDi6FHbbVfviro+WojiFzv+s8MPMHBczVePfUpDJLwoLT0ht1l4YwBCbi8pJAveEEdnkHyPyTP/mzRfwg==",
+      "license": "MIT",
+      "dependencies": {
+        "safe-buffer": "~5.1.0"
+      }
+    },
     "node_modules/eastasianwidth": {
       "version": "0.2.0",
       "resolved": "https://registry.npmjs.org/eastasianwidth/-/eastasianwidth-0.2.0.tgz",
       "integrity": "sha512-I88TYZWc9XiYHRQ4/3c5rjjfgkjhLyW2luGIheGERbNQ6OY7yTybanSpDXZa8y7VUP9YmDcYa+eyq4ca7iLqWA==",
       "dev": true,
       "license": "MIT"
+    },
+    "node_modules/ecdsa-sig-formatter": {
+      "version": "1.0.11",
+      "resolved": "https://registry.npmjs.org/ecdsa-sig-formatter/-/ecdsa-sig-formatter-1.0.11.tgz",
+      "integrity": "sha512-nagl3RYrbNv6kQkeJIpt6NJZy8twLB/2vtz6yN9Z4vRKHN4/QZJIEbqohALSgwKdnksuY3k5Addp5lg8sVoVcQ==",
+      "license": "Apache-2.0",
+      "dependencies": {
+        "safe-buffer": "^5.0.1"
+      }
     },
     "node_modules/ejs": {
       "version": "3.1.10",
@@ -11915,7 +13141,6 @@ F:\kirana-pos\package-lock.json
       "version": "1.0.1",
       "resolved": "https://registry.npmjs.org/es-define-property/-/es-define-property-1.0.1.tgz",
       "integrity": "sha512-e3nRfgfUZ4rNGL232gUgX06QNyyez04KdjFrF+LTRoOXmrOgFKDg4BCdsjW8EnT69eqdYGmRpJwiPVYNrCaW3g==",
-      "dev": true,
       "license": "MIT",
       "engines": {
         "node": ">= 0.4"
@@ -11969,7 +13194,6 @@ F:\kirana-pos\package-lock.json
       "version": "1.1.2",
       "resolved": "https://registry.npmjs.org/es-object-atoms/-/es-object-atoms-1.1.2.tgz",
       "integrity": "sha512-HWcBoN6NileqtSydK2FqHbS/LoDd2pqrnQHLyJzBj4kOp/ky2MWMN694xOfkK8/SnUsW2DH7EfyVlydKCsm1Zw==",
-      "dev": true,
       "license": "MIT",
       "dependencies": {
         "es-errors": "^1.3.0"
@@ -11982,7 +13206,6 @@ F:\kirana-pos\package-lock.json
       "version": "2.1.0",
       "resolved": "https://registry.npmjs.org/es-set-tostringtag/-/es-set-tostringtag-2.1.0.tgz",
       "integrity": "sha512-j6vWzfrGVfyXxge+O0x5sh6cvxAog0a/4Rdd2K36zCMV5eJ+/+tOAngRO8cODMNWbVRdVlmGZQL2YS3yR8bIUA==",
-      "dev": true,
       "license": "MIT",
       "dependencies": {
         "es-errors": "^1.3.0",
@@ -12589,6 +13812,38 @@ F:\kirana-pos\package-lock.json
         "node": ">=0.10.0"
       }
     },
+    "node_modules/exceljs": {
+      "version": "4.4.0",
+      "resolved": "https://registry.npmjs.org/exceljs/-/exceljs-4.4.0.tgz",
+      "integrity": "sha512-XctvKaEMaj1Ii9oDOqbW/6e1gXknSY4g/aLCDicOXqBE4M0nRWkUu0PTp++UPNzoFY12BNHMfs/VadKIS6llvg==",
+      "license": "MIT",
+      "dependencies": {
+        "archiver": "^5.0.0",
+        "dayjs": "^1.8.34",
+        "fast-csv": "^4.3.1",
+        "jszip": "^3.10.1",
+        "readable-stream": "^3.6.0",
+        "saxes": "^5.0.1",
+        "tmp": "^0.2.0",
+        "unzipper": "^0.10.11",
+        "uuid": "^8.3.0"
+      },
+      "engines": {
+        "node": ">=8.3.0"
+      }
+    },
+    "node_modules/exceljs/node_modules/saxes": {
+      "version": "5.0.1",
+      "resolved": "https://registry.npmjs.org/saxes/-/saxes-5.0.1.tgz",
+      "integrity": "sha512-5LBh1Tls8c9xgGjw3QrMwETmTMVk0oFgvrFSvWx62llR2hcEInrKNZ2GZCCuuy2lvWrdl5jhbpeqc5hRYKFOcw==",
+      "license": "ISC",
+      "dependencies": {
+        "xmlchars": "^2.2.0"
+      },
+      "engines": {
+        "node": ">=10"
+      }
+    },
     "node_modules/expand-template": {
       "version": "2.0.3",
       "resolved": "https://registry.npmjs.org/expand-template/-/expand-template-2.0.3.tgz",
@@ -12614,6 +13869,12 @@ F:\kirana-pos\package-lock.json
       "integrity": "sha512-ZgEeZXj30q+I0EN+CbSSpIyPaJ5HVQD18Z1m+u1FXbAeT94mr1zw50q4q6jiiC447Nl/YTcIYSAftiGqetwXCA==",
       "dev": true,
       "license": "Apache-2.0"
+    },
+    "node_modules/extend": {
+      "version": "3.0.2",
+      "resolved": "https://registry.npmjs.org/extend/-/extend-3.0.2.tgz",
+      "integrity": "sha512-fjquC59cD7CyW6urNXK0FBufkZcoiGG80wTuPujX590cB5Ttln20E2UB4S/WARVqhXffZl2LNgS+gQdPIIim/g==",
+      "license": "MIT"
     },
     "node_modules/extract-zip": {
       "version": "2.0.1",
@@ -12646,6 +13907,19 @@ F:\kirana-pos\package-lock.json
       ],
       "license": "MIT",
       "optional": true
+    },
+    "node_modules/fast-csv": {
+      "version": "4.3.6",
+      "resolved": "https://registry.npmjs.org/fast-csv/-/fast-csv-4.3.6.tgz",
+      "integrity": "sha512-2RNSpuwwsJGP0frGsOmTb9oUF+VkFSM4SyLTDgwf2ciHWTarN0lQTC+F2f/t5J9QjW+c65VFIAAu85GsvMIusw==",
+      "license": "MIT",
+      "dependencies": {
+        "@fast-csv/format": "4.3.5",
+        "@fast-csv/parse": "4.3.6"
+      },
+      "engines": {
+        "node": ">=10.0.0"
+      }
     },
     "node_modules/fast-deep-equal": {
       "version": "3.1.3",
@@ -12715,6 +13989,29 @@ F:\kirana-pos\package-lock.json
       "license": "MIT",
       "dependencies": {
         "pend": "~1.2.0"
+      }
+    },
+    "node_modules/fetch-blob": {
+      "version": "3.2.0",
+      "resolved": "https://registry.npmjs.org/fetch-blob/-/fetch-blob-3.2.0.tgz",
+      "integrity": "sha512-7yAQpD2UMJzLi1Dqv7qFYnPbaPx7ZfFK6PiIxQ4PfkGPyNyl2Ugx+a/umUonmKqjhM4DnfbMvdX6otXq83soQQ==",
+      "funding": [
+        {
+          "type": "github",
+          "url": "https://github.com/sponsors/jimmywarting"
+        },
+        {
+          "type": "paypal",
+          "url": "https://paypal.me/jimmywarting"
+        }
+      ],
+      "license": "MIT",
+      "dependencies": {
+        "node-domexception": "^1.0.0",
+        "web-streams-polyfill": "^3.0.3"
+      },
+      "engines": {
+        "node": "^12.20 || >= 14.13"
       }
     },
     "node_modules/file-entry-cache": {
@@ -12824,7 +14121,6 @@ F:\kirana-pos\package-lock.json
       "version": "1.16.0",
       "resolved": "https://registry.npmjs.org/follow-redirects/-/follow-redirects-1.16.0.tgz",
       "integrity": "sha512-y5rN/uOsadFT/JfYwhxRS5R7Qce+g3zG97+JrtFZlC9klX/W5hD7iiLzScI4nZqUS7DNUdhPgw4xI8W2LuXlUw==",
-      "dev": true,
       "funding": [
         {
           "type": "individual",
@@ -12861,7 +14157,6 @@ F:\kirana-pos\package-lock.json
       "version": "4.0.6",
       "resolved": "https://registry.npmjs.org/form-data/-/form-data-4.0.6.tgz",
       "integrity": "sha512-vKatAh4SlVfgbv+YtmhiRjhEMJsYpsG1Y2rMQtR+SVSbytsSD1YGzDIcrAJmdFec88u/+VoGmxnl+80gL1tRCQ==",
-      "dev": true,
       "license": "MIT",
       "dependencies": {
         "asynckit": "^0.4.0",
@@ -12872,6 +14167,18 @@ F:\kirana-pos\package-lock.json
       },
       "engines": {
         "node": ">= 6"
+      }
+    },
+    "node_modules/formdata-polyfill": {
+      "version": "4.0.10",
+      "resolved": "https://registry.npmjs.org/formdata-polyfill/-/formdata-polyfill-4.0.10.tgz",
+      "integrity": "sha512-buewHzMvYL29jdeQTVILecSaZKnt/RJWjoZCF5OW60Z67/GmSLBkOFM7qh1PI3zFNtJbaZL5eQu1vLfazOwj4g==",
+      "license": "MIT",
+      "dependencies": {
+        "fetch-blob": "^3.1.2"
+      },
+      "engines": {
+        "node": ">=12.20.0"
       }
     },
     "node_modules/fs-constants": {
@@ -12932,7 +14239,6 @@ F:\kirana-pos\package-lock.json
       "version": "1.0.0",
       "resolved": "https://registry.npmjs.org/fs.realpath/-/fs.realpath-1.0.0.tgz",
       "integrity": "sha512-OO0pH2lK6a0hZnAdau5ItzHPI6pUlvI7jMVnxUQRtw4owF2wk8lOSabtGDCTP4Ggrg2MbGnWO9X8K1t4+fGMDw==",
-      "dev": true,
       "license": "ISC"
     },
     "node_modules/fsevents": {
@@ -12947,6 +14253,47 @@ F:\kirana-pos\package-lock.json
       ],
       "engines": {
         "node": "^8.16.0 || ^10.6.0 || >=11.0.0"
+      }
+    },
+    "node_modules/fstream": {
+      "version": "1.0.12",
+      "resolved": "https://registry.npmjs.org/fstream/-/fstream-1.0.12.tgz",
+      "integrity": "sha512-WvJ193OHa0GHPEL+AycEJgxvBEwyfRkN1vhjca23OaPVMCaLCXTd5qAu82AjTcgP1UJmytkOKb63Ypde7raDIg==",
+      "deprecated": "This package is no longer supported.",
+      "license": "ISC",
+      "dependencies": {
+        "graceful-fs": "^4.1.2",
+        "inherits": "~2.0.0",
+        "mkdirp": ">=0.5 0",
+        "rimraf": "2"
+      },
+      "engines": {
+        "node": ">=0.6"
+      }
+    },
+    "node_modules/fstream/node_modules/mkdirp": {
+      "version": "0.5.6",
+      "resolved": "https://registry.npmjs.org/mkdirp/-/mkdirp-0.5.6.tgz",
+      "integrity": "sha512-FP+p8RB8OWpF3YZBCrP5gtADmtXApB5AMLn+vdyA+PyxCjrCs00mjyUozssO33cwDeT3wNGdLxJ5M//YqtHAJw==",
+      "license": "MIT",
+      "dependencies": {
+        "minimist": "^1.2.6"
+      },
+      "bin": {
+        "mkdirp": "bin/cmd.js"
+      }
+    },
+    "node_modules/fstream/node_modules/rimraf": {
+      "version": "2.7.1",
+      "resolved": "https://registry.npmjs.org/rimraf/-/rimraf-2.7.1.tgz",
+      "integrity": "sha512-uWjbaKIK3T1OSVptzX7Nl6PvQ3qAGtKEtVRjRuazjfL3Bx5eI409VZSqgND+4UNnmzLVdPj9FqFJNPqBZFve4w==",
+      "deprecated": "Rimraf versions prior to v4 are no longer supported",
+      "license": "ISC",
+      "dependencies": {
+        "glob": "^7.1.3"
+      },
+      "bin": {
+        "rimraf": "bin.js"
       }
     },
     "node_modules/function-bind": {
@@ -13013,6 +14360,34 @@ F:\kirana-pos\package-lock.json
         "node": "^12.13.0 || ^14.15.0 || >=16.0.0"
       }
     },
+    "node_modules/gaxios": {
+      "version": "7.1.5",
+      "resolved": "https://registry.npmjs.org/gaxios/-/gaxios-7.1.5.tgz",
+      "integrity": "sha512-5FZy72Rh8LhtjmvDrKkI+lVhrsQrVKVsItxMoDm5mNQE+xR0WVIIs+jzPSJgBvKVsLi24fZhXJIsNI0bihDzFg==",
+      "license": "Apache-2.0",
+      "dependencies": {
+        "extend": "^3.0.2",
+        "https-proxy-agent": "^7.0.1",
+        "node-fetch": "^3.3.2"
+      },
+      "engines": {
+        "node": ">=18"
+      }
+    },
+    "node_modules/gcp-metadata": {
+      "version": "8.1.2",
+      "resolved": "https://registry.npmjs.org/gcp-metadata/-/gcp-metadata-8.1.2.tgz",
+      "integrity": "sha512-zV/5HKTfCeKWnxG0Dmrw51hEWFGfcF2xiXqcA3+J90WDuP0SvoiSO5ORvcBsifmx/FoIjgQN3oNOGaQ5PhLFkg==",
+      "license": "Apache-2.0",
+      "dependencies": {
+        "gaxios": "^7.0.0",
+        "google-logging-utils": "^1.0.0",
+        "json-bigint": "^1.0.0"
+      },
+      "engines": {
+        "node": ">=18"
+      }
+    },
     "node_modules/generator-function": {
       "version": "2.0.1",
       "resolved": "https://registry.npmjs.org/generator-function/-/generator-function-2.0.1.tgz",
@@ -13047,7 +14422,6 @@ F:\kirana-pos\package-lock.json
       "version": "1.3.0",
       "resolved": "https://registry.npmjs.org/get-intrinsic/-/get-intrinsic-1.3.0.tgz",
       "integrity": "sha512-9fSjSaos/fRIVIp+xSJlE6lfwhES7LNtKaCBIamHsjr2na1BiABJPo0mOjjz8GJDURarmCPGqaiVg5mfjb98CQ==",
-      "dev": true,
       "license": "MIT",
       "dependencies": {
         "call-bind-apply-helpers": "^1.0.2",
@@ -13081,7 +14455,6 @@ F:\kirana-pos\package-lock.json
       "version": "1.0.1",
       "resolved": "https://registry.npmjs.org/get-proto/-/get-proto-1.0.1.tgz",
       "integrity": "sha512-sTSfBjoXBp89JvIKIefqw7U2CCebsc74kiY6awiGogKtoSGbgjYE/G/+l9sF3MWFPNc9IcoOC4ODfKHfxFmp0g==",
-      "dev": true,
       "license": "MIT",
       "dependencies": {
         "dunder-proto": "^1.0.1",
@@ -13149,7 +14522,6 @@ F:\kirana-pos\package-lock.json
       "resolved": "https://registry.npmjs.org/glob/-/glob-7.2.3.tgz",
       "integrity": "sha512-nFR0zLpU2YCaRxwoCJvL6UvCH2JFyFVIvwTLsIf21AuHlMskA1hhTdk+LlYJtOlYt9v6dvszD2BGRqBL+iQK9Q==",
       "deprecated": "Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me",
-      "dev": true,
       "license": "ISC",
       "dependencies": {
         "fs.realpath": "^1.0.0",
@@ -13244,11 +14616,54 @@ F:\kirana-pos\package-lock.json
         "url": "https://github.com/sponsors/ljharb"
       }
     },
+    "node_modules/google-auth-library": {
+      "version": "10.9.0",
+      "resolved": "https://registry.npmjs.org/google-auth-library/-/google-auth-library-10.9.0.tgz",
+      "integrity": "sha512-xtvUqvINPhTaBm7nXqlYPcrMHJPm1lCNdSovxnKKhTm+4JsvQ+KGVYJViLoH9Yxu8w+T0Qv5HubzYT9BLrppJg==",
+      "license": "Apache-2.0",
+      "dependencies": {
+        "base64-js": "^1.3.0",
+        "ecdsa-sig-formatter": "^1.0.11",
+        "gaxios": "^7.1.4",
+        "gcp-metadata": "8.1.2",
+        "google-logging-utils": "1.1.3",
+        "jws": "^4.0.0"
+      },
+      "engines": {
+        "node": ">=18"
+      }
+    },
+    "node_modules/google-logging-utils": {
+      "version": "1.1.3",
+      "resolved": "https://registry.npmjs.org/google-logging-utils/-/google-logging-utils-1.1.3.tgz",
+      "integrity": "sha512-eAmLkjDjAFCVXg7A1unxHsLf961m6y17QFqXqAXGj/gVkKFrEICfStRfwUlGNfeCEjNRa32JEWOUTlYXPyyKvA==",
+      "license": "Apache-2.0",
+      "engines": {
+        "node": ">=14"
+      }
+    },
+    "node_modules/google-spreadsheet": {
+      "version": "4.1.5",
+      "resolved": "https://registry.npmjs.org/google-spreadsheet/-/google-spreadsheet-4.1.5.tgz",
+      "integrity": "sha512-6xx2yuo5LRHtpFdkluaOIpKSn5awGZa+uCDwgPMuMGnBi1bAoJHz5h5naGU7NoEEWzAdb0Pqlfv/J8KXQvkasQ==",
+      "license": "MIT",
+      "dependencies": {
+        "axios": "^1.7.7",
+        "lodash": "^4.17.21"
+      },
+      "peerDependencies": {
+        "google-auth-library": ">=8.8.0"
+      },
+      "peerDependenciesMeta": {
+        "google-auth-library": {
+          "optional": true
+        }
+      }
+    },
     "node_modules/gopd": {
       "version": "1.2.0",
       "resolved": "https://registry.npmjs.org/gopd/-/gopd-1.2.0.tgz",
       "integrity": "sha512-ZUKRh6/kUFoAiTAtTYPZJ3hw9wNxx+BIBOijnlG9PnrJsCcSjs1wyyD6vJpaYtgnzDrKYRSqf3OO6Rfa93xsRg==",
-      "dev": true,
       "license": "MIT",
       "engines": {
         "node": ">= 0.4"
@@ -13287,7 +14702,6 @@ F:\kirana-pos\package-lock.json
       "version": "4.2.11",
       "resolved": "https://registry.npmjs.org/graceful-fs/-/graceful-fs-4.2.11.tgz",
       "integrity": "sha512-RbJ5/jmFcNNCcDV5o9eTnBLJ/HszWV0P73bc+Ff4nS/rJj+YaS6IGyiOL0VoBYX+l1Wrl3k63h/KrH+nhJ0XvQ==",
-      "dev": true,
       "license": "ISC"
     },
     "node_modules/graphemer": {
@@ -13353,7 +14767,6 @@ F:\kirana-pos\package-lock.json
       "version": "1.1.0",
       "resolved": "https://registry.npmjs.org/has-symbols/-/has-symbols-1.1.0.tgz",
       "integrity": "sha512-1cDNdwJ2Jaohmb3sg4OmKaMBwuC48sYni5HUw2DvsC8LjGTLK9h+eb1X6RyuOHe4hT0ULCW68iomhjUoKUqlPQ==",
-      "dev": true,
       "license": "MIT",
       "engines": {
         "node": ">= 0.4"
@@ -13366,7 +14779,6 @@ F:\kirana-pos\package-lock.json
       "version": "1.0.2",
       "resolved": "https://registry.npmjs.org/has-tostringtag/-/has-tostringtag-1.0.2.tgz",
       "integrity": "sha512-NqADB8VjPFLM2V0VvHUewwwsw0ZWBaIdgo+ieHtK3hasLz4qeCRjYcqfB6AQrBggRKppKF8L52/VqdVsO47Dlw==",
-      "dev": true,
       "license": "MIT",
       "dependencies": {
         "has-symbols": "^1.0.3"
@@ -13482,7 +14894,6 @@ F:\kirana-pos\package-lock.json
       "version": "7.0.6",
       "resolved": "https://registry.npmjs.org/https-proxy-agent/-/https-proxy-agent-7.0.6.tgz",
       "integrity": "sha512-vK9P5/iUfdl95AI+JVyUuIcVtd4ofvtrOr3HNtM2yxC9bnMbEdp3x01OhQNnjb8IJYi38VlTE3mBXwcfvywuSw==",
-      "dev": true,
       "license": "MIT",
       "dependencies": {
         "agent-base": "^7.1.2",
@@ -13563,6 +14974,12 @@ F:\kirana-pos\package-lock.json
         "node": ">= 4"
       }
     },
+    "node_modules/immediate": {
+      "version": "3.0.6",
+      "resolved": "https://registry.npmjs.org/immediate/-/immediate-3.0.6.tgz",
+      "integrity": "sha512-XXOFtyqDjNDAQxVfYxuF7g9Il/IbWmmlQg2MYKOH8ExIT1qg6xc4zyS3HaEEATgs1btfzxq15ciUiY7gjSXRGQ==",
+      "license": "MIT"
+    },
     "node_modules/import-fresh": {
       "version": "3.3.1",
       "resolved": "https://registry.npmjs.org/import-fresh/-/import-fresh-3.3.1.tgz",
@@ -13612,7 +15029,6 @@ F:\kirana-pos\package-lock.json
       "resolved": "https://registry.npmjs.org/inflight/-/inflight-1.0.6.tgz",
       "integrity": "sha512-k92I/b08q4wvFscXCLvqfsHCrjrF7yiXsQuIVvVE7N82W3+aqpzuUdBbfhWcy/FZR3/4IgflMgKLOsvPDrGCJA==",
       "deprecated": "This module is not supported, and leaks memory. Do not use it. Check out lru-cache if you want a good and tested way to coalesce async requests by a key value, which is much more comprehensive and powerful.",
-      "dev": true,
       "license": "ISC",
       "dependencies": {
         "once": "^1.3.0",
@@ -14363,6 +15779,15 @@ F:\kirana-pos\package-lock.json
         "node": ">=6"
       }
     },
+    "node_modules/json-bigint": {
+      "version": "1.0.0",
+      "resolved": "https://registry.npmjs.org/json-bigint/-/json-bigint-1.0.0.tgz",
+      "integrity": "sha512-SiPv/8VpZuWbvLSMtTDU8hEfrZWg/mH/nV/b4o0CYbSxu1UIQPLdwKOCIyLQX+VIPO5vrLX3i8qtqFyhdPSUSQ==",
+      "license": "MIT",
+      "dependencies": {
+        "bignumber.js": "^9.0.0"
+      }
+    },
     "node_modules/json-buffer": {
       "version": "3.0.1",
       "resolved": "https://registry.npmjs.org/json-buffer/-/json-buffer-3.0.1.tgz",
@@ -14431,6 +15856,75 @@ F:\kirana-pos\package-lock.json
         "node": ">=4.0"
       }
     },
+    "node_modules/jszip": {
+      "version": "3.10.1",
+      "resolved": "https://registry.npmjs.org/jszip/-/jszip-3.10.1.tgz",
+      "integrity": "sha512-xXDvecyTpGLrqFrvkrUSoxxfJI5AH7U8zxxtVclpsUtMCq4JQ290LY8AW5c7Ggnr/Y/oK+bQMbqK2qmtk3pN4g==",
+      "license": "(MIT OR GPL-3.0-or-later)",
+      "dependencies": {
+        "lie": "~3.3.0",
+        "pako": "~1.0.2",
+        "readable-stream": "~2.3.6",
+        "setimmediate": "^1.0.5"
+      }
+    },
+    "node_modules/jszip/node_modules/isarray": {
+      "version": "1.0.0",
+      "resolved": "https://registry.npmjs.org/isarray/-/isarray-1.0.0.tgz",
+      "integrity": "sha512-VLghIWNM6ELQzo7zwmcg0NmTVyWKYjvIeM83yjp0wRDTmUnrM678fQbcKBo6n2CJEF0szoG//ytg+TKla89ALQ==",
+      "license": "MIT"
+    },
+    "node_modules/jszip/node_modules/readable-stream": {
+      "version": "2.3.8",
+      "resolved": "https://registry.npmjs.org/readable-stream/-/readable-stream-2.3.8.tgz",
+      "integrity": "sha512-8p0AUk4XODgIewSi0l8Epjs+EVnWiK7NoDIEGU0HhE7+ZyY8D1IMY7odu5lRrFXGg71L15KG8QrPmum45RTtdA==",
+      "license": "MIT",
+      "dependencies": {
+        "core-util-is": "~1.0.0",
+        "inherits": "~2.0.3",
+        "isarray": "~1.0.0",
+        "process-nextick-args": "~2.0.0",
+        "safe-buffer": "~5.1.1",
+        "string_decoder": "~1.1.1",
+        "util-deprecate": "~1.0.1"
+      }
+    },
+    "node_modules/jszip/node_modules/safe-buffer": {
+      "version": "5.1.2",
+      "resolved": "https://registry.npmjs.org/safe-buffer/-/safe-buffer-5.1.2.tgz",
+      "integrity": "sha512-Gd2UZBJDkXlY7GbJxfsE8/nvKkUEU1G38c1siN6QP6a9PT9MmHB8GnpscSmMJSoF8LOIrt8ud/wPtojys4G6+g==",
+      "license": "MIT"
+    },
+    "node_modules/jszip/node_modules/string_decoder": {
+      "version": "1.1.1",
+      "resolved": "https://registry.npmjs.org/string_decoder/-/string_decoder-1.1.1.tgz",
+      "integrity": "sha512-n/ShnvDi6FHbbVfviro+WojiFzv+s8MPMHBczVePfUpDJLwoLT0ht1l4YwBCbi8pJAveEEdnkHyPyTP/mzRfwg==",
+      "license": "MIT",
+      "dependencies": {
+        "safe-buffer": "~5.1.0"
+      }
+    },
+    "node_modules/jwa": {
+      "version": "2.0.1",
+      "resolved": "https://registry.npmjs.org/jwa/-/jwa-2.0.1.tgz",
+      "integrity": "sha512-hRF04fqJIP8Abbkq5NKGN0Bbr3JxlQ+qhZufXVr0DvujKy93ZCbXZMHDL4EOtodSbCWxOqR8MS1tXA5hwqCXDg==",
+      "license": "MIT",
+      "dependencies": {
+        "buffer-equal-constant-time": "^1.0.1",
+        "ecdsa-sig-formatter": "1.0.11",
+        "safe-buffer": "^5.0.1"
+      }
+    },
+    "node_modules/jws": {
+      "version": "4.0.1",
+      "resolved": "https://registry.npmjs.org/jws/-/jws-4.0.1.tgz",
+      "integrity": "sha512-EKI/M/yqPncGUUh44xz0PxSidXFr/+r0pA70+gIYhjv+et7yxM+s29Y+VGDkovRofQem0fs7Uvf4+YmAdyRduA==",
+      "license": "MIT",
+      "dependencies": {
+        "jwa": "^2.0.1",
+        "safe-buffer": "^5.0.1"
+      }
+    },
     "node_modules/keyv": {
       "version": "4.5.4",
       "resolved": "https://registry.npmjs.org/keyv/-/keyv-4.5.4.tgz",
@@ -14472,9 +15966,7 @@ F:\kirana-pos\package-lock.json
       "version": "1.0.1",
       "resolved": "https://registry.npmjs.org/lazystream/-/lazystream-1.0.1.tgz",
       "integrity": "sha512-b94GiNHQNy6JNTrt5w6zNyffMrNkXZb3KTkCZJb2V1xaEGCk093vkZ2jk3tpaeP33/OiXC+WvK9AxUebnf5nbw==",
-      "dev": true,
       "license": "MIT",
-      "peer": true,
       "dependencies": {
         "readable-stream": "^2.0.5"
       },
@@ -14486,17 +15978,13 @@ F:\kirana-pos\package-lock.json
       "version": "1.0.0",
       "resolved": "https://registry.npmjs.org/isarray/-/isarray-1.0.0.tgz",
       "integrity": "sha512-VLghIWNM6ELQzo7zwmcg0NmTVyWKYjvIeM83yjp0wRDTmUnrM678fQbcKBo6n2CJEF0szoG//ytg+TKla89ALQ==",
-      "dev": true,
-      "license": "MIT",
-      "peer": true
+      "license": "MIT"
     },
     "node_modules/lazystream/node_modules/readable-stream": {
       "version": "2.3.8",
       "resolved": "https://registry.npmjs.org/readable-stream/-/readable-stream-2.3.8.tgz",
       "integrity": "sha512-8p0AUk4XODgIewSi0l8Epjs+EVnWiK7NoDIEGU0HhE7+ZyY8D1IMY7odu5lRrFXGg71L15KG8QrPmum45RTtdA==",
-      "dev": true,
       "license": "MIT",
-      "peer": true,
       "dependencies": {
         "core-util-is": "~1.0.0",
         "inherits": "~2.0.3",
@@ -14511,17 +15999,13 @@ F:\kirana-pos\package-lock.json
       "version": "5.1.2",
       "resolved": "https://registry.npmjs.org/safe-buffer/-/safe-buffer-5.1.2.tgz",
       "integrity": "sha512-Gd2UZBJDkXlY7GbJxfsE8/nvKkUEU1G38c1siN6QP6a9PT9MmHB8GnpscSmMJSoF8LOIrt8ud/wPtojys4G6+g==",
-      "dev": true,
-      "license": "MIT",
-      "peer": true
+      "license": "MIT"
     },
     "node_modules/lazystream/node_modules/string_decoder": {
       "version": "1.1.1",
       "resolved": "https://registry.npmjs.org/string_decoder/-/string_decoder-1.1.1.tgz",
       "integrity": "sha512-n/ShnvDi6FHbbVfviro+WojiFzv+s8MPMHBczVePfUpDJLwoLT0ht1l4YwBCbi8pJAveEEdnkHyPyTP/mzRfwg==",
-      "dev": true,
       "license": "MIT",
-      "peer": true,
       "dependencies": {
         "safe-buffer": "~5.1.0"
       }
@@ -14538,6 +16022,15 @@ F:\kirana-pos\package-lock.json
       },
       "engines": {
         "node": ">= 0.8.0"
+      }
+    },
+    "node_modules/lie": {
+      "version": "3.3.0",
+      "resolved": "https://registry.npmjs.org/lie/-/lie-3.3.0.tgz",
+      "integrity": "sha512-UaiMJzeWRlEujzAuw5LokY1L5ecNQYZKfmyZ9L7wDHb/p5etKaxXhohBcrw0EYby+G/NA52vRSN4N39dxHAIwQ==",
+      "license": "MIT",
+      "dependencies": {
+        "immediate": "~3.0.5"
       }
     },
     "node_modules/lilconfig": {
@@ -14557,6 +16050,12 @@ F:\kirana-pos\package-lock.json
       "resolved": "https://registry.npmjs.org/lines-and-columns/-/lines-and-columns-1.2.4.tgz",
       "integrity": "sha512-7ylylesZQ/PV29jhEDl3Ufjo6ZX7gCqJr5F7PKrqc93v7fzSymt1BpwEU8nAUXs8qzzvqhbjhK5QZg6Mt/HkBg==",
       "license": "MIT"
+    },
+    "node_modules/listenercount": {
+      "version": "1.0.1",
+      "resolved": "https://registry.npmjs.org/listenercount/-/listenercount-1.0.1.tgz",
+      "integrity": "sha512-3mk/Zag0+IJxeDrxSgaDPy4zZ3w05PRZeJNnlWhzFz5OkX49J4krc+A8X2d2M69vGMBEX0uyl8M+W+8gH+kBqQ==",
+      "license": "ISC"
     },
     "node_modules/locate-path": {
       "version": "6.0.0",
@@ -14578,40 +16077,74 @@ F:\kirana-pos\package-lock.json
       "version": "4.18.1",
       "resolved": "https://registry.npmjs.org/lodash/-/lodash-4.18.1.tgz",
       "integrity": "sha512-dMInicTPVE8d1e5otfwmmjlxkZoUpiVLwyeTdUsi/Caj/gfzzblBcCE5sRHV/AsjuCmxWrte2TNGSYuCeCq+0Q==",
-      "dev": true,
       "license": "MIT"
     },
     "node_modules/lodash.defaults": {
       "version": "4.2.0",
       "resolved": "https://registry.npmjs.org/lodash.defaults/-/lodash.defaults-4.2.0.tgz",
       "integrity": "sha512-qjxPLHd3r5DnsdGacqOMU6pb/avJzdh9tFX2ymgoZE27BmjXrNy/y4LoaiTeAb+O3gL8AfpJGtqfX/ae2leYYQ==",
-      "dev": true,
-      "license": "MIT",
-      "peer": true
+      "license": "MIT"
     },
     "node_modules/lodash.difference": {
       "version": "4.5.0",
       "resolved": "https://registry.npmjs.org/lodash.difference/-/lodash.difference-4.5.0.tgz",
       "integrity": "sha512-dS2j+W26TQ7taQBGN8Lbbq04ssV3emRw4NY58WErlTO29pIqS0HmoT5aJ9+TUQ1N3G+JOZSji4eugsWwGp9yPA==",
-      "dev": true,
-      "license": "MIT",
-      "peer": true
+      "license": "MIT"
+    },
+    "node_modules/lodash.escaperegexp": {
+      "version": "4.1.2",
+      "resolved": "https://registry.npmjs.org/lodash.escaperegexp/-/lodash.escaperegexp-4.1.2.tgz",
+      "integrity": "sha512-TM9YBvyC84ZxE3rgfefxUWiQKLilstD6k7PTGt6wfbtXF8ixIJLOL3VYyV/z+ZiPLsVxAsKAFVwWlWeb2Y8Yyw==",
+      "license": "MIT"
     },
     "node_modules/lodash.flatten": {
       "version": "4.4.0",
       "resolved": "https://registry.npmjs.org/lodash.flatten/-/lodash.flatten-4.4.0.tgz",
       "integrity": "sha512-C5N2Z3DgnnKr0LOpv/hKCgKdb7ZZwafIrsesve6lmzvZIRZRGaZ/l6Q8+2W7NaT+ZwO3fFlSCzCzrDCFdJfZ4g==",
-      "dev": true,
-      "license": "MIT",
-      "peer": true
+      "license": "MIT"
+    },
+    "node_modules/lodash.groupby": {
+      "version": "4.6.0",
+      "resolved": "https://registry.npmjs.org/lodash.groupby/-/lodash.groupby-4.6.0.tgz",
+      "integrity": "sha512-5dcWxm23+VAoz+awKmBaiBvzox8+RqMgFhi7UvX9DHZr2HdxHXM/Wrf8cfKpsW37RNrvtPn6hSwNqurSILbmJw==",
+      "license": "MIT"
+    },
+    "node_modules/lodash.isboolean": {
+      "version": "3.0.3",
+      "resolved": "https://registry.npmjs.org/lodash.isboolean/-/lodash.isboolean-3.0.3.tgz",
+      "integrity": "sha512-Bz5mupy2SVbPHURB98VAcw+aHh4vRV5IPNhILUCsOzRmsTmSQ17jIuqopAentWoehktxGd9e/hbIXq980/1QJg==",
+      "license": "MIT"
+    },
+    "node_modules/lodash.isequal": {
+      "version": "4.5.0",
+      "resolved": "https://registry.npmjs.org/lodash.isequal/-/lodash.isequal-4.5.0.tgz",
+      "integrity": "sha512-pDo3lu8Jhfjqls6GkMgpahsF9kCyayhgykjyLMNFTKWrpVdAQtYyB4muAMWozBB4ig/dtWAmsMxLEI8wuz+DYQ==",
+      "deprecated": "This package is deprecated. Use require('node:util').isDeepStrictEqual instead.",
+      "license": "MIT"
+    },
+    "node_modules/lodash.isfunction": {
+      "version": "3.0.9",
+      "resolved": "https://registry.npmjs.org/lodash.isfunction/-/lodash.isfunction-3.0.9.tgz",
+      "integrity": "sha512-AirXNj15uRIMMPihnkInB4i3NHeb4iBtNg9WRWuK2o31S+ePwwNmDPaTL3o7dTJ+VXNZim7rFs4rxN4YU1oUJw==",
+      "license": "MIT"
+    },
+    "node_modules/lodash.isnil": {
+      "version": "4.0.0",
+      "resolved": "https://registry.npmjs.org/lodash.isnil/-/lodash.isnil-4.0.0.tgz",
+      "integrity": "sha512-up2Mzq3545mwVnMhTDMdfoG1OurpA/s5t88JmQX809eH3C8491iu2sfKhTfhQtKY78oPNhiaHJUpT/dUDAAtng==",
+      "license": "MIT"
     },
     "node_modules/lodash.isplainobject": {
       "version": "4.0.6",
       "resolved": "https://registry.npmjs.org/lodash.isplainobject/-/lodash.isplainobject-4.0.6.tgz",
       "integrity": "sha512-oSXzaWypCMHkPC3NvBEaPHf0KsA5mvPrOPgQWDsbg8n7orZ290M0BmC/jgRZ4vcJ6DTAhjrsSYgdsW/F+MFOBA==",
-      "dev": true,
-      "license": "MIT",
-      "peer": true
+      "license": "MIT"
+    },
+    "node_modules/lodash.isundefined": {
+      "version": "3.0.1",
+      "resolved": "https://registry.npmjs.org/lodash.isundefined/-/lodash.isundefined-3.0.1.tgz",
+      "integrity": "sha512-MXB1is3s899/cD8jheYYE2V9qTHwKvt+npCwpD+1Sxm3Q3cECXCiYHjeHWXNwr6Q0SOBPrYUDxendrO6goVTEA==",
+      "license": "MIT"
     },
     "node_modules/lodash.merge": {
       "version": "4.6.2",
@@ -14624,9 +16157,13 @@ F:\kirana-pos\package-lock.json
       "version": "4.6.0",
       "resolved": "https://registry.npmjs.org/lodash.union/-/lodash.union-4.6.0.tgz",
       "integrity": "sha512-c4pB2CdGrGdjMKYLA+XiRDO7Y0PRQbm/Gzg8qMj+QH+pFVAoTp5sBpO0odL3FjoPCGjK96p6qsP+yQoiLoOBcw==",
-      "dev": true,
-      "license": "MIT",
-      "peer": true
+      "license": "MIT"
+    },
+    "node_modules/lodash.uniq": {
+      "version": "4.5.0",
+      "resolved": "https://registry.npmjs.org/lodash.uniq/-/lodash.uniq-4.5.0.tgz",
+      "integrity": "sha512-xfBaXQd9ryd9dlSDvnvI0lvxfLJlYAZzXomUYzLKtUeOQvOP5piqAWuGtrhWeqaXK9hhoM/iyJc5AV+XfsX3HQ==",
+      "license": "MIT"
     },
     "node_modules/log-symbols": {
       "version": "4.1.0",
@@ -14840,7 +16377,6 @@ F:\kirana-pos\package-lock.json
       "version": "1.1.0",
       "resolved": "https://registry.npmjs.org/math-intrinsics/-/math-intrinsics-1.1.0.tgz",
       "integrity": "sha512-/IXtbwEk5HTPyEwyKX6hGkYXxM9nbj64B+ilVJnC/R6B0pH5G4V3b0pVbL7DBj4tkhBAppbQUlf6F6Xl9LHu1g==",
-      "dev": true,
       "license": "MIT",
       "engines": {
         "node": ">= 0.4"
@@ -14885,7 +16421,6 @@ F:\kirana-pos\package-lock.json
       "version": "1.52.0",
       "resolved": "https://registry.npmjs.org/mime-db/-/mime-db-1.52.0.tgz",
       "integrity": "sha512-sPU4uV7dYlvtWJxwwxHD0PuihVNiE7TyAbQ5SWxDCB9mUYvOgroQOwYQQOKPJ8CIbE+1ETVlOoK1UC2nU3gYvg==",
-      "dev": true,
       "license": "MIT",
       "engines": {
         "node": ">= 0.6"
@@ -14895,7 +16430,6 @@ F:\kirana-pos\package-lock.json
       "version": "2.1.35",
       "resolved": "https://registry.npmjs.org/mime-types/-/mime-types-2.1.35.tgz",
       "integrity": "sha512-ZDY+bPm5zTTF+YpCrAU9nK0UgICYPT0QtT1NZWFv4s++TNkcgVaT0g6+4R2uI4MjQjzysHB1zxuWL50hzaeXiw==",
-      "dev": true,
       "license": "MIT",
       "dependencies": {
         "mime-db": "1.52.0"
@@ -14940,7 +16474,6 @@ F:\kirana-pos\package-lock.json
       "version": "3.1.5",
       "resolved": "https://registry.npmjs.org/minimatch/-/minimatch-3.1.5.tgz",
       "integrity": "sha512-VgjWUsnnT6n+NUk6eZq77zeFdpW2LWDzP6zFGrCbHXiYNul5Dzqk2HHQ5uFH2DNW5Xbp8+jVzaeNt94ssEEl4w==",
-      "dev": true,
       "license": "ISC",
       "dependencies": {
         "brace-expansion": "^1.1.7"
@@ -15195,7 +16728,6 @@ F:\kirana-pos\package-lock.json
       "version": "2.1.3",
       "resolved": "https://registry.npmjs.org/ms/-/ms-2.1.3.tgz",
       "integrity": "sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTlA==",
-      "dev": true,
       "license": "MIT"
     },
     "node_modules/mz": {
@@ -15376,6 +16908,26 @@ F:\kirana-pos\package-lock.json
         "node": ">=10"
       }
     },
+    "node_modules/node-domexception": {
+      "version": "1.0.0",
+      "resolved": "https://registry.npmjs.org/node-domexception/-/node-domexception-1.0.0.tgz",
+      "integrity": "sha512-/jKZoMpw0F8GRwl4/eLROPA3cfcXtLApP0QzLmUT/HuPCZWyB7IY9ZrMeKw2O/nFIqPQB3PVM9aYm0F312AXDQ==",
+      "deprecated": "Use your platform's native DOMException instead",
+      "funding": [
+        {
+          "type": "github",
+          "url": "https://github.com/sponsors/jimmywarting"
+        },
+        {
+          "type": "github",
+          "url": "https://paypal.me/jimmywarting"
+        }
+      ],
+      "license": "MIT",
+      "engines": {
+        "node": ">=10.5.0"
+      }
+    },
     "node_modules/node-exports-info": {
       "version": "1.6.2",
       "resolved": "https://registry.npmjs.org/node-exports-info/-/node-exports-info-1.6.2.tgz",
@@ -15393,6 +16945,24 @@ F:\kirana-pos\package-lock.json
       },
       "funding": {
         "url": "https://github.com/sponsors/ljharb"
+      }
+    },
+    "node_modules/node-fetch": {
+      "version": "3.3.2",
+      "resolved": "https://registry.npmjs.org/node-fetch/-/node-fetch-3.3.2.tgz",
+      "integrity": "sha512-dRB78srN/l6gqWulah9SrxeYnxeddIG30+GOqK/9OlLVyLg3HPnr6SqOWTWOXKRwC2eGYCkZ59NNuSgvSrpgOA==",
+      "license": "MIT",
+      "dependencies": {
+        "data-uri-to-buffer": "^4.0.0",
+        "fetch-blob": "^3.1.4",
+        "formdata-polyfill": "^4.0.10"
+      },
+      "engines": {
+        "node": "^12.20.0 || ^14.13.1 || >=16.0.0"
+      },
+      "funding": {
+        "type": "opencollective",
+        "url": "https://opencollective.com/node-fetch"
       }
     },
     "node_modules/node-gyp": {
@@ -15872,6 +17442,12 @@ F:\kirana-pos\package-lock.json
       "dev": true,
       "license": "BlueOak-1.0.0"
     },
+    "node_modules/pako": {
+      "version": "1.0.11",
+      "resolved": "https://registry.npmjs.org/pako/-/pako-1.0.11.tgz",
+      "integrity": "sha512-4hLB8Py4zZce5s4yd9XzopqwVv/yGNhV1Bl8NTmCq1763HeK2+EwVTv+leGeL13Dnh2wfbqowVPXCIO0z4taYw==",
+      "license": "(MIT AND Zlib)"
+    },
     "node_modules/parent-module": {
       "version": "1.0.1",
       "resolved": "https://registry.npmjs.org/parent-module/-/parent-module-1.0.1.tgz",
@@ -15912,7 +17488,6 @@ F:\kirana-pos\package-lock.json
       "version": "1.0.1",
       "resolved": "https://registry.npmjs.org/path-is-absolute/-/path-is-absolute-1.0.1.tgz",
       "integrity": "sha512-AVbw3UJ2e9bq64vSaS9Am0fje1Pa8pbGqTTsmXfaIiMpnr5DlDhfJOuLj9Sf95ZPVDAUerDfEk88MPmPe7UCQg==",
-      "dev": true,
       "license": "MIT",
       "engines": {
         "node": ">=0.10.0"
@@ -16479,9 +18054,7 @@ F:\kirana-pos\package-lock.json
       "version": "2.0.1",
       "resolved": "https://registry.npmjs.org/process-nextick-args/-/process-nextick-args-2.0.1.tgz",
       "integrity": "sha512-3ouUOpQhtgrbOa17J7+uxOTpITYWaGP7/AhoR3+A+/1e9skrzelGi/dXzEYyvbxubEF6Wn2ypscTKiKJFFn1ag==",
-      "dev": true,
-      "license": "MIT",
-      "peer": true
+      "license": "MIT"
     },
     "node_modules/progress": {
       "version": "2.0.3",
@@ -16537,7 +18110,6 @@ F:\kirana-pos\package-lock.json
       "version": "2.1.0",
       "resolved": "https://registry.npmjs.org/proxy-from-env/-/proxy-from-env-2.1.0.tgz",
       "integrity": "sha512-cJ+oHTW1VAEa8cJslgmUZrc+sjRKgAKl3Zyse6+PV38hZe/V6Z14TbCuXcan9F9ghlz4QrFr2c92TNF82UkYHA==",
-      "dev": true,
       "license": "MIT",
       "engines": {
         "node": ">=10"
@@ -16784,9 +18356,7 @@ F:\kirana-pos\package-lock.json
       "version": "1.1.3",
       "resolved": "https://registry.npmjs.org/readdir-glob/-/readdir-glob-1.1.3.tgz",
       "integrity": "sha512-v05I2k7xN8zXvPD9N+z/uhXPaj0sUFCe2rcWZIpBsqxfP7xXFQ0tipAd/wjj1YxWyWtUS5IDJpOG82JKt2EAVA==",
-      "dev": true,
       "license": "Apache-2.0",
-      "peer": true,
       "dependencies": {
         "minimatch": "^5.1.0"
       }
@@ -16795,9 +18365,7 @@ F:\kirana-pos\package-lock.json
       "version": "2.1.1",
       "resolved": "https://registry.npmjs.org/brace-expansion/-/brace-expansion-2.1.1.tgz",
       "integrity": "sha512-WR1cURNjuvBLMZBMbqM0UoE+WAfdUcEV1ccD8PVBVOI+Z3ND4+SZbN8RsfT2bMuG1qwz5RFvPukSZm5fF2D5eA==",
-      "dev": true,
       "license": "MIT",
-      "peer": true,
       "dependencies": {
         "balanced-match": "^1.0.0"
       }
@@ -16806,9 +18374,7 @@ F:\kirana-pos\package-lock.json
       "version": "5.1.9",
       "resolved": "https://registry.npmjs.org/minimatch/-/minimatch-5.1.9.tgz",
       "integrity": "sha512-7o1wEA2RyMP7Iu7GNba9vc0RWWGACJOCZBJX2GJWip0ikV+wcOsgVuY9uE8CPiyQhkGFSlhuSkZPavN7u1c2Fw==",
-      "dev": true,
       "license": "ISC",
-      "peer": true,
       "dependencies": {
         "brace-expansion": "^2.0.1"
       },
@@ -17306,6 +18872,12 @@ F:\kirana-pos\package-lock.json
       "engines": {
         "node": ">= 0.4"
       }
+    },
+    "node_modules/setimmediate": {
+      "version": "1.0.5",
+      "resolved": "https://registry.npmjs.org/setimmediate/-/setimmediate-1.0.5.tgz",
+      "integrity": "sha512-MATJdZp8sLqDl/68LfQmbP8zKPLQNV6BIZoIgrscFDQ+RsvK/BxeDQOgyxKKoh0y/8h3BqVFnCqQ/gd+reiIXA==",
+      "license": "MIT"
     },
     "node_modules/sharp": {
       "version": "0.33.5",
@@ -18416,7 +19988,6 @@ F:\kirana-pos\package-lock.json
       "version": "0.2.7",
       "resolved": "https://registry.npmjs.org/tmp/-/tmp-0.2.7.tgz",
       "integrity": "sha512-e0votIpp4Uo2AJYSzVHV6xCcawuiez3DzqDAbrTc3YxBkplN6e+dM13ZeIcZnDg/QpSuU2zfZ3rzwY8ukEnaXw==",
-      "dev": true,
       "license": "MIT",
       "engines": {
         "node": ">=14.14"
@@ -18488,6 +20059,15 @@ F:\kirana-pos\package-lock.json
       },
       "engines": {
         "node": ">=18"
+      }
+    },
+    "node_modules/traverse": {
+      "version": "0.3.9",
+      "resolved": "https://registry.npmjs.org/traverse/-/traverse-0.3.9.tgz",
+      "integrity": "sha512-iawgk0hLP3SxGKDfnDJf8wTz4p2qImnyihM5Hh/sGvQ3K37dPi/w8sRhdNIxYA1TwFwc5mDhIJq+O0RsvXBKdQ==",
+      "license": "MIT/X11",
+      "engines": {
+        "node": "*"
       }
     },
     "node_modules/tree-kill": {
@@ -18876,6 +20456,66 @@ F:\kirana-pos\package-lock.json
         "@unrs/resolver-binding-win32-x64-msvc": "1.12.2"
       }
     },
+    "node_modules/unzipper": {
+      "version": "0.10.14",
+      "resolved": "https://registry.npmjs.org/unzipper/-/unzipper-0.10.14.tgz",
+      "integrity": "sha512-ti4wZj+0bQTiX2KmKWuwj7lhV+2n//uXEotUmGuQqrbVZSEGFMbI68+c6JCQ8aAmUWYvtHEz2A8K6wXvueR/6g==",
+      "license": "MIT",
+      "dependencies": {
+        "big-integer": "^1.6.17",
+        "binary": "~0.3.0",
+        "bluebird": "~3.4.1",
+        "buffer-indexof-polyfill": "~1.0.0",
+        "duplexer2": "~0.1.4",
+        "fstream": "^1.0.12",
+        "graceful-fs": "^4.2.2",
+        "listenercount": "~1.0.1",
+        "readable-stream": "~2.3.6",
+        "setimmediate": "~1.0.4"
+      }
+    },
+    "node_modules/unzipper/node_modules/bluebird": {
+      "version": "3.4.7",
+      "resolved": "https://registry.npmjs.org/bluebird/-/bluebird-3.4.7.tgz",
+      "integrity": "sha512-iD3898SR7sWVRHbiQv+sHUtHnMvC1o3nW5rAcqnq3uOn07DSAppZYUkIGslDz6gXC7HfunPe7YVBgoEJASPcHA==",
+      "license": "MIT"
+    },
+    "node_modules/unzipper/node_modules/isarray": {
+      "version": "1.0.0",
+      "resolved": "https://registry.npmjs.org/isarray/-/isarray-1.0.0.tgz",
+      "integrity": "sha512-VLghIWNM6ELQzo7zwmcg0NmTVyWKYjvIeM83yjp0wRDTmUnrM678fQbcKBo6n2CJEF0szoG//ytg+TKla89ALQ==",
+      "license": "MIT"
+    },
+    "node_modules/unzipper/node_modules/readable-stream": {
+      "version": "2.3.8",
+      "resolved": "https://registry.npmjs.org/readable-stream/-/readable-stream-2.3.8.tgz",
+      "integrity": "sha512-8p0AUk4XODgIewSi0l8Epjs+EVnWiK7NoDIEGU0HhE7+ZyY8D1IMY7odu5lRrFXGg71L15KG8QrPmum45RTtdA==",
+      "license": "MIT",
+      "dependencies": {
+        "core-util-is": "~1.0.0",
+        "inherits": "~2.0.3",
+        "isarray": "~1.0.0",
+        "process-nextick-args": "~2.0.0",
+        "safe-buffer": "~5.1.1",
+        "string_decoder": "~1.1.1",
+        "util-deprecate": "~1.0.1"
+      }
+    },
+    "node_modules/unzipper/node_modules/safe-buffer": {
+      "version": "5.1.2",
+      "resolved": "https://registry.npmjs.org/safe-buffer/-/safe-buffer-5.1.2.tgz",
+      "integrity": "sha512-Gd2UZBJDkXlY7GbJxfsE8/nvKkUEU1G38c1siN6QP6a9PT9MmHB8GnpscSmMJSoF8LOIrt8ud/wPtojys4G6+g==",
+      "license": "MIT"
+    },
+    "node_modules/unzipper/node_modules/string_decoder": {
+      "version": "1.1.1",
+      "resolved": "https://registry.npmjs.org/string_decoder/-/string_decoder-1.1.1.tgz",
+      "integrity": "sha512-n/ShnvDi6FHbbVfviro+WojiFzv+s8MPMHBczVePfUpDJLwoLT0ht1l4YwBCbi8pJAveEEdnkHyPyTP/mzRfwg==",
+      "license": "MIT",
+      "dependencies": {
+        "safe-buffer": "~5.1.0"
+      }
+    },
     "node_modules/update-browserslist-db": {
       "version": "1.2.3",
       "resolved": "https://registry.npmjs.org/update-browserslist-db/-/update-browserslist-db-1.2.3.tgz",
@@ -18972,6 +20612,16 @@ F:\kirana-pos\package-lock.json
       "resolved": "https://registry.npmjs.org/util-deprecate/-/util-deprecate-1.0.2.tgz",
       "integrity": "sha512-EPD5q1uXyFxJpCrLnCc1nHnq3gOa6DZBocAIiI2TaSCA7VCJ1UJDMagCzIkXNsUYfD1daK//LTEQ8xiIbrHtcw==",
       "license": "MIT"
+    },
+    "node_modules/uuid": {
+      "version": "8.3.2",
+      "resolved": "https://registry.npmjs.org/uuid/-/uuid-8.3.2.tgz",
+      "integrity": "sha512-+NYs2QeMWy+GWFOEm9xnn6HCDp0l7QBD7ml8zLUmJ+93Q5NF0NocErnwkTkXVFNiX3/fpC6afS8Dhb/gz7R7eg==",
+      "deprecated": "uuid@10 and below is no longer supported.  For ESM codebases, update to uuid@latest.  For CommonJS codebases, use uuid@11 (but be aware this version will likely be deprecated in 2028).",
+      "license": "MIT",
+      "bin": {
+        "uuid": "dist/bin/uuid"
+      }
     },
     "node_modules/v8-compile-cache-lib": {
       "version": "3.0.1",
@@ -19222,46 +20872,6 @@ F:\kirana-pos\package-lock.json
         "node": ">=12.0.0"
       }
     },
-    "node_modules/wait-on/node_modules/agent-base": {
-      "version": "6.0.2",
-      "resolved": "https://registry.npmjs.org/agent-base/-/agent-base-6.0.2.tgz",
-      "integrity": "sha512-RZNwNclF7+MS/8bDg70amg32dyeZGZxiDuQmZxKLAlQjr3jGyLx+4Kkk58UO7D2QdgFIQCovuSuZESne6RG6XQ==",
-      "dev": true,
-      "license": "MIT",
-      "dependencies": {
-        "debug": "4"
-      },
-      "engines": {
-        "node": ">= 6.0.0"
-      }
-    },
-    "node_modules/wait-on/node_modules/axios": {
-      "version": "1.18.1",
-      "resolved": "https://registry.npmjs.org/axios/-/axios-1.18.1.tgz",
-      "integrity": "sha512-3nTvFlvpn9Zu/RkHUqtc7/+al4UpRW5az71ap5zccp6e8RAYEzhMTecX8Dz1wWDYrPpUoB1HAQEGEAEvUr7S9g==",
-      "dev": true,
-      "license": "MIT",
-      "dependencies": {
-        "follow-redirects": "^1.16.0",
-        "form-data": "^4.0.5",
-        "https-proxy-agent": "^5.0.1",
-        "proxy-from-env": "^2.1.0"
-      }
-    },
-    "node_modules/wait-on/node_modules/https-proxy-agent": {
-      "version": "5.0.1",
-      "resolved": "https://registry.npmjs.org/https-proxy-agent/-/https-proxy-agent-5.0.1.tgz",
-      "integrity": "sha512-dFcAjpTQFgoLMzC2VwU+C/CbS7uRL0lWmxDITmqm7C+7F0Odmj6s9l6alZc6AELXhrnggM2CeWSXHGOdX2YtwA==",
-      "dev": true,
-      "license": "MIT",
-      "dependencies": {
-        "agent-base": "6",
-        "debug": "4"
-      },
-      "engines": {
-        "node": ">= 6"
-      }
-    },
     "node_modules/wait-on/node_modules/rxjs": {
       "version": "7.8.2",
       "resolved": "https://registry.npmjs.org/rxjs/-/rxjs-7.8.2.tgz",
@@ -19280,6 +20890,15 @@ F:\kirana-pos\package-lock.json
       "license": "MIT",
       "dependencies": {
         "defaults": "^1.0.3"
+      }
+    },
+    "node_modules/web-streams-polyfill": {
+      "version": "3.3.3",
+      "resolved": "https://registry.npmjs.org/web-streams-polyfill/-/web-streams-polyfill-3.3.3.tgz",
+      "integrity": "sha512-d2JWLCivmZYTSIoge9MsgFCZrt571BikcWGYkjC1khllbTeDlGqZ2D8vD8E/lJa8WGWbb7Plm8/XJYV7IJHZZw==",
+      "license": "MIT",
+      "engines": {
+        "node": ">= 8"
       }
     },
     "node_modules/webidl-conversions": {
@@ -19561,7 +21180,6 @@ F:\kirana-pos\package-lock.json
       "version": "2.2.0",
       "resolved": "https://registry.npmjs.org/xmlchars/-/xmlchars-2.2.0.tgz",
       "integrity": "sha512-JZnDKK8B0RCDw84FNdDAIpZK+JuJw+s7Lz8nksI7SIuU3UXJJslUthsi+uWBUYOwPFwW7W7PRLRfUKpxjtjFCw==",
-      "dev": true,
       "license": "MIT"
     },
     "node_modules/y18n": {
@@ -19648,9 +21266,7 @@ F:\kirana-pos\package-lock.json
       "version": "4.1.1",
       "resolved": "https://registry.npmjs.org/zip-stream/-/zip-stream-4.1.1.tgz",
       "integrity": "sha512-9qv4rlDiopXg4E69k+vMHjNN63YFMe9sZMrdlvKnCjlCRWeCBswPPMPUfx+ipsAWq1LXHe70RcbaHdJJpS6hyQ==",
-      "dev": true,
       "license": "MIT",
-      "peer": true,
       "dependencies": {
         "archiver-utils": "^3.0.4",
         "compress-commons": "^4.1.2",
@@ -19664,9 +21280,7 @@ F:\kirana-pos\package-lock.json
       "version": "3.0.4",
       "resolved": "https://registry.npmjs.org/archiver-utils/-/archiver-utils-3.0.4.tgz",
       "integrity": "sha512-KVgf4XQVrTjhyWmx6cte4RxonPLR9onExufI1jhvw/MQ4BB6IsZD5gT8Lq+u/+pRkWna/6JoHpiQioaqFP5Rzw==",
-      "dev": true,
       "license": "MIT",
-      "peer": true,
       "dependencies": {
         "glob": "^7.2.3",
         "graceful-fs": "^4.2.0",
@@ -19777,6 +21391,9 @@ F:\kirana-pos\package.json
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "date-fns": "^3.6.0",
+    "exceljs": "^4.4.0",
+    "google-auth-library": "^10.9.0",
+    "google-spreadsheet": "^4.1.5",
     "lucide-react": "^0.468.0",
     "next": "15.1.3",
     "react": "^19.0.0",
@@ -19793,6 +21410,7 @@ F:\kirana-pos\package.json
     "@testing-library/jest-dom": "^6.6.3",
     "@testing-library/react": "^16.1.0",
     "@types/better-sqlite3": "^7.6.12",
+    "@types/exceljs": "^0.5.3",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
@@ -20043,6 +21661,22 @@ export default config;
 F:\kirana-pos\tsconfig.electron.json
 
 ```json
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "outDir": "./electron/dist",
+    "noEmit": false,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "jsx": "react"
+  },
+  "include": ["electron/**/*.ts", "database/**/*.ts", "features/**/*.ts", "shared/types/**/*.ts", "shared/lib/utils.ts"],
+  "exclude": ["node_modules"]
+}
+
 ```
 
 

@@ -10,8 +10,8 @@ import { registerCustomerHandlers } from "./customer.handlers";
 import { registerReportHandlers } from "./report.handlers";
 import { registerSettingsHandlers } from "./settings.handlers";
 import { registerBackupHandlers } from "./backup.handlers";
-import { registerAuditHandlers } from "./audit.handlers";
 import { registerSyncHandlers } from "./sync.handlers";
+import { registerAuditHandlers } from "./audit.handlers";
 
 export function registerAllHandlers(ipcMain: IpcMain): void {
   registerAuthHandlers(ipcMain);
@@ -23,9 +23,8 @@ export function registerAllHandlers(ipcMain: IpcMain): void {
   registerReportHandlers(ipcMain);
   registerSettingsHandlers(ipcMain);
   registerBackupHandlers(ipcMain);
-  registerAuditHandlers(ipcMain);
-  registerBackupHandlers(ipcMain);
   registerSyncHandlers(ipcMain);
+  registerAuditHandlers(ipcMain);
 
   ipcMain.handle(IPC_CHANNELS.APP_GET_VERSION, (): IpcResponse<string> => ({ success: true, data: process.env["npm_package_version"] ?? "1.0.0" }));
 }
