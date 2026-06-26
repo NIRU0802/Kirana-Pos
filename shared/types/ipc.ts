@@ -1,0 +1,33 @@
+export const IPC_CHANNELS = {
+  AUTH_LOGIN: "auth:login", AUTH_LOGOUT: "auth:logout",
+  AUTH_CURRENT_USER: "auth:currentUser", AUTH_CHANGE_PASSWORD: "auth:changePassword",
+  PRODUCT_GET_ALL: "product:getAll", PRODUCT_GET_BY_ID: "product:getById",
+  PRODUCT_GET_BY_BARCODE: "product:getByBarcode", PRODUCT_CREATE: "product:create",
+  PRODUCT_UPDATE: "product:update", PRODUCT_DELETE: "product:delete", PRODUCT_SEARCH: "product:search",
+  CATEGORY_GET_ALL: "category:getAll", CATEGORY_CREATE: "category:create",
+  CATEGORY_UPDATE: "category:update", CATEGORY_DELETE: "category:delete",
+  INVENTORY_GET_ALL: "inventory:getAll", INVENTORY_GET_STOCK: "inventory:getStock",
+  INVENTORY_ADJUST: "inventory:adjust", INVENTORY_GET_MOVEMENTS: "inventory:getMovements",
+  INVENTORY_LOW_STOCK: "inventory:getLowStock",
+  BILL_CREATE: "bill:create", BILL_GET_BY_ID: "bill:getById",
+  BILL_GET_RECENT: "bill:getRecent", BILL_SEARCH: "bill:search", BILL_REFUND: "bill:refund",
+  CUSTOMER_GET_ALL: "customer:getAll", CUSTOMER_GET_BY_ID: "customer:getById",
+  CUSTOMER_SEARCH: "customer:search", CUSTOMER_CREATE: "customer:create",
+  CUSTOMER_UPDATE: "customer:update", CUSTOMER_GET_LEDGER: "customer:getLedger",
+  CUSTOMER_SETTLE: "customer:settle",
+  REPORT_DAILY_SALES: "report:dailySales", REPORT_PRODUCT_SALES: "report:productSales",
+  REPORT_GST: "report:gst", REPORT_PROFIT_LOSS: "report:profitLoss",
+  REPORT_STOCK_VALUATION: "report:stockValuation",
+  SETTINGS_GET_ALL: "settings:getAll", SETTINGS_UPDATE: "settings:update",
+  BACKUP_CREATE: "backup:create", BACKUP_RESTORE: "backup:restore", BACKUP_LIST: "backup:list",
+  BACKUP_PICK_EXPORT_FOLDER: "backup:pickExportFolder",
+  BACKUP_PICK_CREDENTIALS_FILE: "backup:pickCredentialsFile",
+  SYNC_NOW: "sync:now",
+  SYNC_MERGE_MONTH: "sync:mergeMonth",
+  SYNC_RESTORE_FROM_SHEETS: "sync:restoreFromSheets",
+  AUDIT_GET_LOGS: "audit:getLogs",
+  APP_GET_VERSION: "app:getVersion",
+} as const;
+
+export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];
+export type IpcResponse<T> = { success: true; data: T } | { success: false; error: string };

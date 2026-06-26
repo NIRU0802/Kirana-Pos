@@ -1,0 +1,15 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "outDir": "./electron/dist",
+    "noEmit": false,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "jsx": "react"
+  },
+  "include": ["electron/**/*.ts", "database/**/*.ts", "features/**/*.ts", "shared/types/**/*.ts", "shared/lib/utils.ts"],
+  "exclude": ["node_modules"]
+}

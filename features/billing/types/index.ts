@@ -1,0 +1,6 @@
+import type { PaymentMethod, BillStatus } from "../../../shared/types";
+export interface CartItem { productId: number; productName: string; barcode: string | null; unit: string; quantity: number; unitPrice: number; costPrice: number; gstRate: number; gstAmount: number; lineTotal: number; }
+export interface BillTotals { subtotal: number; gstTotal: number; discount: number; roundOff: number; grandTotal: number; }
+export interface CreateBillInput { customerId?: number; items: Array<{productId:number;productName:string;quantity:number;unitPrice:number;costPrice:number;gstRate:number;gstAmount:number;lineTotal:number}>; subtotal:number; gstTotal:number; discount:number; roundOff:number; grandTotal:number; amountPaid:number; changeDue:number; paymentMethod:PaymentMethod; note?:string; createdBy?:string; }
+export interface BillRow { id:number; billNumber:string; customerId:number|null; customerName:string|null; status:BillStatus; subtotal:number; gstTotal:number; discount:number; roundOff:number; grandTotal:number; amountPaid:number; changeDue:number; paymentMethod:PaymentMethod; note:string|null; createdAt:string; updatedAt:string; createdBy:string; }
+export interface BillItemRow { id:number; billId:number; productId:number; productName:string; quantity:number; unitPrice:number; costPrice:number; gstRate:number; gstAmount:number; lineTotal:number; }

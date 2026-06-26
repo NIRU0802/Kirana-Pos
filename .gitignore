@@ -1,0 +1,11 @@
+node_modules/
+.next/
+out/
+electron/dist/
+dist/
+database/*.db
+database/*.db-shm
+database/*.db-wal
+.env
+coverage/
+*.log
