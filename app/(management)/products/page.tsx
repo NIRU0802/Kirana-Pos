@@ -11,6 +11,7 @@ import { Plus, Search, Pencil, Trash2, AlertTriangle, Upload } from "lucide-reac
 import type { Product, BulkImportResult } from "@/features/products/types";
 import { ProductDialog } from "@/features/products/components/product-dialog";
 import { useToastEmitter } from "@/shared/hooks/use-toast";
+import { Badge } from "@/shared/components/ui/badge";
 
 export default function ProductsPage() {
   const [products, setProducts] = useState<Product[]>([]);
@@ -89,9 +90,13 @@ export default function ProductsPage() {
                   <TableCell className="text-right">{formatCurrency(p.mrp)}</TableCell>
                   <TableCell className="text-right">{p.gstRate}%</TableCell>
                   <TableCell className="text-right">
-                    <span className={`font-medium ${p.stock <= p.lowStockAlert ? "text-orange-500" : ""}`}>
-                      {p.stock <= p.lowStockAlert && <AlertTriangle className="h-3 w-3 inline mr-1" />}{p.stock} {p.unit}
-                    </span>
+                    {p.stock <= 0 ? (
+                      <Badge variant="destructive">Out of Stock</Badge>
+                    ) : (
+                      <span className={`font-medium ${p.stock <= p.lowStockAlert ? "text-orange-500" : ""}`}>
+                        {p.stock <= p.lowStockAlert && <AlertTriangle className="h-3 w-3 inline mr-1" />}{p.stock} {p.unit}
+                      </span>
+                    )}
                   </TableCell>
                   <TableCell>
                     <div className="flex gap-1">
