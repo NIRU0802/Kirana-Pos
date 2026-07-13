@@ -10,6 +10,15 @@ export class StockRepository extends BaseRepository {
   getLowStock(): StockRow[] {
     return this.db.prepare<[], StockRow>(`SELECT s.productId,p.name AS productName,p.unit,s.quantity,p.lowStockAlert FROM Stock s JOIN Product p ON p.id=s.productId WHERE p.isActive=1 AND s.quantity<=p.lowStockAlert ORDER BY s.quantity`).all();
   }
+  getExpiringSoon(): (StockRow & { expiryDate: string | null; expiryAlertDays: number })[] {
+    return this.db.prepare<[], StockRow & { expiryDate: string | null; expiryAlertDays: number }>(
+      `SELECT s.productId, p.name AS productName, p.unit, s.quantity, p.lowStockAlert, p.expiryDate, p.expiryAlertDays
+       FROM Stock s JOIN Product p ON p.id = s.productId
+       WHERE p.isActive = 1 AND p.expiryDate IS NOT NULL
+         AND date(p.expiryDate) <= date('now', '+' || p.expiryAlertDays || ' days')
+       ORDER BY date(p.expiryDate) ASC`
+    ).all();
+  }
   getByProduct(productId: number): number {
     return this.db.prepare<[number],{quantity:number}>("SELECT COALESCE(quantity,0) AS quantity FROM Stock WHERE productId=?").get(productId)?.quantity ?? 0;
   }

@@ -7,8 +7,8 @@ import { Input } from "@/shared/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/shared/components/ui/table";
 import { Card, CardContent, CardHeader } from "@/shared/components/ui/card";
 import { formatCurrency } from "@/shared/lib/utils";
-import { Plus, Search, Pencil, Trash2, AlertTriangle } from "lucide-react";
-import type { Product } from "@/features/products/types";
+import { Plus, Search, Pencil, Trash2, AlertTriangle, Upload } from "lucide-react";
+import type { Product, BulkImportResult } from "@/features/products/types";
 import { ProductDialog } from "@/features/products/components/product-dialog";
 import { useToastEmitter } from "@/shared/hooks/use-toast";
 
@@ -18,6 +18,7 @@ export default function ProductsPage() {
   const [loading, setLoading] = useState(true);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<Product | null>(null);
+  const [importing, setImporting] = useState(false);
   const { toast } = useToastEmitter();
 
   const load = useCallback(() => {
@@ -36,11 +37,37 @@ export default function ProductsPage() {
     catch (e) { toast({ title: e instanceof Error ? e.message : "Delete failed", variant: "destructive" }); }
   };
 
+  const handleImport = async () => {
+    const filePath = await ipcInvoke<string | null>(IPC_CHANNELS.PRODUCT_PICK_IMPORT_FILE);
+    if (!filePath) return;
+    setImporting(true);
+    try {
+      const result = await ipcInvoke<BulkImportResult>(IPC_CHANNELS.PRODUCT_BULK_IMPORT, filePath);
+      toast({
+        title: `Import done: ${result.created} added, ${result.updated} updated, ${result.failed} failed`,
+        variant: result.failed > 0 ? "destructive" : "success",
+      });
+      if (result.failed > 0) {
+        console.error("Import errors:", result.errors);
+      }
+      load();
+    } catch (e) {
+      toast({ title: e instanceof Error ? e.message : "Import failed", variant: "destructive" });
+    } finally {
+      setImporting(false);
+    }
+  };
+
   return (
     <div className="p-6 space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">Products</h1>
-        <Button onClick={() => { setEditing(null); setDialogOpen(true); }}><Plus className="h-4 w-4 mr-2" /> Add Product</Button>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={handleImport} disabled={importing}>
+            <Upload className="h-4 w-4 mr-2" /> {importing ? "Importing…" : "Import Excel"}
+          </Button>
+          <Button onClick={() => { setEditing(null); setDialogOpen(true); }}><Plus className="h-4 w-4 mr-2" /> Add Product</Button>
+        </div>
       </div>
       <Card>
         <CardHeader className="pb-3"><div className="flex items-center gap-2"><Search className="h-4 w-4 text-muted-foreground" /><Input placeholder="Search by name or barcode…" value={search} onChange={(e) => setSearch(e.target.value)} className="max-w-sm" /></div></CardHeader>

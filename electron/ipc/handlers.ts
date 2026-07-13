@@ -12,6 +12,7 @@ import { registerSettingsHandlers } from "./settings.handlers";
 import { registerBackupHandlers } from "./backup.handlers";
 import { registerSyncHandlers } from "./sync.handlers";
 import { registerAuditHandlers } from "./audit.handlers";
+import { registerWhatsAppHandlers } from "./whatsapp.handlers";
 
 export function registerAllHandlers(ipcMain: IpcMain): void {
   registerAuthHandlers(ipcMain);
@@ -25,8 +26,11 @@ export function registerAllHandlers(ipcMain: IpcMain): void {
   registerBackupHandlers(ipcMain);
   registerSyncHandlers(ipcMain);
   registerAuditHandlers(ipcMain);
+  registerWhatsAppHandlers(ipcMain); // ← NEW
 
-  ipcMain.handle(IPC_CHANNELS.APP_GET_VERSION, (): IpcResponse<string> => ({ success: true, data: process.env["npm_package_version"] ?? "1.0.0" }));
+  ipcMain.handle(IPC_CHANNELS.APP_GET_VERSION, (): IpcResponse<string> => ({
+    success: true, data: process.env["npm_package_version"] ?? "1.0.0",
+  }));
 }
 
 export function safeHandle<T>(fn: (...args: unknown[]) => T | Promise<T>): (...args: unknown[]) => Promise<IpcResponse<T>> {

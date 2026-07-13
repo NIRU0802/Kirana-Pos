@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import { useForm, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { z } from "zod";
+import type { z } from "zod";
 import { createProductSchema, updateProductSchema } from "../schemas";
 import { ipcInvoke } from "@/shared/lib/ipc-client";
 import { IPC_CHANNELS } from "@/shared/types/ipc";
@@ -42,15 +42,23 @@ export function ProductDialog({ open, onClose, product, onSaved }: Props) {
         costPrice: paiseToRupees(product.costPrice), sellingPrice: paiseToRupees(product.sellingPrice), mrp: paiseToRupees(product.mrp),
         gstRate: product.gstRate as 0 | 5 | 12 | 18 | 28, hsnCode: product.hsnCode ?? undefined,
         lowStockAlert: product.lowStockAlert, openingStock: 0,
+        expiryDate: product.expiryDate ?? undefined,
+        expiryAlertDays: product.expiryAlertDays ?? 30,
       });
     } else {
-      reset({ unit: "PCS", gstRate: 0, lowStockAlert: 10, openingStock: 0, costPrice: 0, sellingPrice: 0, mrp: 0 });
+      reset({ unit: "PCS", gstRate: 0, lowStockAlert: 10, openingStock: 0, costPrice: 0, sellingPrice: 0, mrp: 0, expiryAlertDays: 30 });
     }
   }, [open, product, reset]);
 
   const onSubmit = async (data: FormValues) => {
     try {
-      const payload = { ...data, costPrice: rupeesToPaise(data.costPrice), sellingPrice: rupeesToPaise(data.sellingPrice), mrp: rupeesToPaise(data.mrp) };
+      const payload = {
+        ...data,
+        costPrice: rupeesToPaise(data.costPrice),
+        sellingPrice: rupeesToPaise(data.sellingPrice),
+        mrp: rupeesToPaise(data.mrp),
+        expiryDate: data.expiryDate || undefined,
+      };
       if (isEdit && product) {
         await ipcInvoke(IPC_CHANNELS.PRODUCT_UPDATE, { ...payload, id: product.id });
         toast({ title: "Product updated", variant: "success" });
@@ -106,8 +114,21 @@ export function ProductDialog({ open, onClose, product, onSaved }: Props) {
                 </Select>
               )} />
             </div>
+            <div className="space-y-1.5"><Label>HSN Code</Label><Input {...register("hsnCode")} placeholder="e.g. 1001" /></div>
             <div className="space-y-1.5"><Label>Low Stock Alert</Label><Input type="number" min="0" {...register("lowStockAlert", { valueAsNumber: true })} /></div>
             {!isEdit && <div className="space-y-1.5"><Label>Opening Stock</Label><Input type="number" min="0" {...register("openingStock", { valueAsNumber: true })} /></div>}
+
+            {/* Expiry tracking */}
+            <div className="space-y-1.5">
+              <Label>Expiry Date</Label>
+              <Input type="date" {...register("expiryDate")} />
+              <p className="text-xs text-muted-foreground">Leave blank if product has no expiry</p>
+            </div>
+            <div className="space-y-1.5">
+              <Label>Alert Before (days)</Label>
+              <Input type="number" min="1" {...register("expiryAlertDays", { valueAsNumber: true })} />
+              <p className="text-xs text-muted-foreground">Warn this many days before expiry</p>
+            </div>
           </div>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
